@@ -983,25 +983,68 @@ class ThreadStore(QObject):
         if pending is not None:
             self._stamp_receipt(msg, pending[0], pending[1])
 
-    def _upgrade_echo_guid(
-        self, thread: dict, body: str, ts: str, outgoing: bool, guid: str,
-    ) -> bool:
-        """Give a MAP-first bubble the guid from its iMessage twin.
+    def _live_content_twin(
+        self,
+        thread: dict,
+        body: str,
+        ts: str,
+        outgoing: bool,
+        *,
+        sender_phone: str = "",
+        require_no_guid: bool = False,
+    ) -> dict | None:
+        """Find an in-memory bubble that is the same message under another handle.
 
-        Returns True if a message was upgraded (caller may need to repaint).
+        Used for MAP ↔ iMessage twins: different event handles, one text.
+        Reload already collapses these in `_materialize_events`; live ingest
+        used to append a second row until restart.
         """
-        if not guid or guid in self._by_guid:
-            return False
-        for prev in reversed(thread["messages"][-12:]):
-            if bool(prev.get("outgoing")) != outgoing or prev.get("body") != body:
+        if not body:
+            return None
+        want_phone = normalize_phone(sender_phone) if sender_phone else ""
+        msgs = thread.get("messages") or []
+        for prev in reversed(msgs[-24:]):
+            if bool(prev.get("outgoing")) != outgoing:
+                continue
+            if (prev.get("body") or "") != body:
                 continue
             if ts_gap_seconds(prev.get("ts"), ts) > _ECHO_WINDOW_SECONDS:
                 continue
-            if prev.get("guid"):
-                return False
-            self._bind_guid(prev, guid)
-            return True
-        return False
+            if require_no_guid and prev.get("guid"):
+                continue
+            # Two people saying the same word in a group are not twins.
+            prev_phone = normalize_phone(prev.get("sender_phone") or "")
+            if want_phone and prev_phone and want_phone != prev_phone:
+                continue
+            return prev
+        return None
+
+    def _upgrade_echo_guid(
+        self,
+        thread: dict,
+        body: str,
+        ts: str,
+        outgoing: bool,
+        guid: str,
+        *,
+        sender_phone: str = "",
+    ) -> bool:
+        """Give a MAP-first bubble the guid from its iMessage twin.
+
+        Works for both directions: phone-sent (outgoing echo) and incoming
+        MAP-then-iMessage. Returns True if a message was upgraded.
+        """
+        if not guid or guid in self._by_guid:
+            return False
+        prev = self._live_content_twin(
+            thread, body, ts, outgoing,
+            sender_phone=sender_phone,
+            require_no_guid=True,
+        )
+        if prev is None:
+            return False
+        self._bind_guid(prev, guid)
+        return True
 
     @staticmethod
     def _person_key(handle: str) -> str:
@@ -1948,13 +1991,24 @@ class ThreadStore(QObject):
         # events.jsonl; `im_guid` is the live D-Bus spelling. Accept both, or
         # every message stops being actionable after a restart.
         guid = ev.get("guid") or ev.get("im_guid") or ""
+        sender_phone = ev.get("sender_phone") or ""
+        raw_type = ev.get("raw_type")
 
-        if self._is_echo(thread, body, ts, outgoing, ev.get("raw_type")):
+        # Same Apple message, second handle (or D-Bus then disk with a
+        # different spelling). Handle-dedupe alone cannot catch this; the
+        # store upserts per handle so reload materialize is what cleaned it
+        # up — collapse live so groups like "the fucky" don't double until
+        # restart.
+        if guid and guid in self._by_guid:
+            return
+
+        if self._is_echo(thread, body, ts, outgoing, raw_type):
             # Phone-sent: MAP often lands first (no guid), then iMessage with
             # the same text and a guid. Treat as an upgrade, not a drop —
             # otherwise Delivered/Read never find a target.
             if guid and self._upgrade_echo_guid(
-                    thread, body, ts, outgoing, guid):
+                    thread, body, ts, outgoing, guid,
+                    sender_phone=sender_phone):
                 if refresh and self._current == key:
                     self._rebuild_messages()
             return
@@ -1963,6 +2017,21 @@ class ThreadStore(QObject):
             if refresh and self._current == key:
                 self._rebuild_messages()
             return
+
+        # Incoming (and non-echo outgoing) transport twins. Never content-
+        # match our own `sms_sent` rows — sending "ok" twice is two messages.
+        if body and raw_type != "sms_sent":
+            if guid:
+                # Guid-bearing twin of a guid-less MAP/transfer bubble.
+                if self._upgrade_echo_guid(
+                        thread, body, ts, outgoing, guid,
+                        sender_phone=sender_phone):
+                    return
+            elif self._live_content_twin(
+                    thread, body, ts, outgoing,
+                    sender_phone=sender_phone) is not None:
+                # Guid-less echo after a guid-bearing row already landed.
+                return
 
         msg = {"body": body, "ts": ts,
                "outgoing": outgoing, "reactions": {},
@@ -1977,8 +2046,8 @@ class ThreadStore(QObject):
                # fallback, matching `SmsEvent.display_sender`.
                "sender_name": (ev.get("sender_name")
                                or ev.get("contact_name")
-                               or ev.get("sender_phone") or ""),
-               "sender_phone": ev.get("sender_phone") or "",
+                               or sender_phone or ""),
+               "sender_phone": sender_phone,
                # Receipts arrive later, on their own signal; an outgoing
                # message starts with no state and gains one when Apple acks.
                "state": "",
