@@ -104,6 +104,10 @@ _state_home = Path(
 
 STATE_DIR: Path = _state_home
 EVENTS_JSONL: Path = _state_home / "events.jsonl"
+# Legacy backup import dump; still read once when migrating into MESSAGES_DB.
+BACKUP_EVENTS_JSONL: Path = _state_home / "backup_events.jsonl"
+# Primary durable message history (live + backup + state). Replaces dual JSONL.
+MESSAGES_DB: Path = _state_home / "messages.sqlite"
 CONTACTS_DB: Path = _state_home / "contacts.sqlite"
 PHOTOS_DIR: Path = _state_home / "contact_photos"
 

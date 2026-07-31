@@ -31,8 +31,9 @@ Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifica
 | 🔔 **Every app's notifications** — Slack, WhatsApp, Mail… | ANCS over BLE | ✅ |
 | 📞 **Take & place phone calls** — caller ID, answer/decline, dial | HFP via oFono | ✅ |
 | 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
-| 📜 **Message history** — incoming + your desktop replies | `sms-list` / the app | ✅ |
+| 📜 **Message history** — live + backup, searchable | SQLite store + FTS | ✅ |
 | 🖥️ **Desktop app** — conversations, notification feed, call UI | Qt / QML | ✅ |
+| 📎 **iMessage extras** — attachments, replies, tapbacks, edits, receipts | Direct Apple transport | ✅ |
 | ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
 
 ### 🤯 The iMessage surprise
@@ -163,16 +164,63 @@ Lets the daemon set the adapter's Class-of-Device on every start without a passw
 
 </details>
 
+<details>
+<summary><b>8 · (Optional) Full iMessage — attachments, replies, tapbacks, receipts</b></summary>
+
+Bluetooth MAP only carries plain text. For guids, media, reply threading, tapbacks,
+edits, typing, and delivery/read receipts, run the direct Apple transport
+(`ib-imessage`). It reuses an OpenBubbles-style registration and talks to APNs/IDS —
+not to the phone over Bluetooth.
+
+```bash
+# Build the helper
+cd rust/ib-imessage && cargo build --release
+cp target/release/ib-imessage ~/.local/bin/.ib-imessage.new \
+  && mv -f ~/.local/bin/.ib-imessage.new ~/.local/bin/ib-imessage
+
+# Import registration from OpenBubbles (once), then enable the user unit
+# See comments in systemd/iphonebridge-imessage.service for the exact import flags.
+mkdir -p ~/.config/systemd/user
+cp systemd/iphonebridge-imessage.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now iphonebridge-imessage
+```
+
+**Important:** Apple allows **one connection per push token**. Stop
+`iphonebridge-imessage` before opening OpenBubbles to renew registration, re-import,
+then start the unit again. Details are in the unit file comments and [`AGENTS.md`](AGENTS.md).
+
+</details>
+
+<details>
+<summary><b>9 · (Optional) Import full history from an iOS backup</b></summary>
+
+MAP never shows messages you typed on the phone, and it has no attachments.
+A local USB (or Wi-Fi) backup has both. After the phone is trusted once:
+
+```bash
+iphonebridge backup-sync              # fresh backup + import into messages.sqlite
+iphonebridge backup-sync --skip-backup  # re-read the last backup on disk
+iphonebridge backup-wifi              # allow later backups without a cable
+```
+
+Open (or restart) `iphonebridge-qt` to see the imported threads. History is merged
+into the same SQLite store the daemon uses for live traffic.
+
+</details>
+
 ## 🖥️ Desktop app
 
-`iphonebridge-qt` is a Qt / QML app — a separate process from the daemon, talking to it over D-Bus, so you can open and close it freely while the daemon keeps running in the background. On Plasma it exports a global menu (View / Status / Settings). Four pages:
+`iphonebridge-qt` is a Qt / QML app — a separate process from the daemon, talking to it over D-Bus, so you can open and close it freely while the daemon keeps running in the background. On Plasma it exports a native global menu (Messages / File / Edit / View / …). Four pages:
 
-- **Messages** — SMS & iMessage conversations grouped by contact. Read history and reply from a compose box; the replies you send are saved into the thread.
+- **Messages** — SMS & iMessage conversations grouped by contact. Opening a chat loads the newest page of messages from SQLite; scroll up for older ones. Reply, react, edit, and unsend from the bubble menu or compose box.
 - **Notifications** — a live feed of every app's notifications (Slack, Mail, WhatsApp…), mirrored from the iPhone over ANCS.
 - **Calls** — a dialer to place calls, plus Answer / Hang-up controls for active ones; an incoming call raises this tab automatically.
 - **Setup** — daemon health, contact and message counts, and the iPhone-toggle checklist.
 
-**Launch at Login** is under **Settings** in the global menu (writes `~/.config/autostart/com.gabriel.iphonebridge.Qt.desktop`).
+**Search** is the field at the top of the conversation list (or **Edit → Find…** / <kbd>Ctrl</kbd>+<kbd>F</kbd>, which focuses that field). Typing filters and full-text-searches message bodies as you type; results replace the sidebar (one row per hit, with a highlighted preview) and open the matching bubble. There is no separate Search menu — search lives in the Messages page only.
+
+**Launch at Login** is under the **Messages** app menu (writes `~/.config/autostart/com.gabriel.iphonebridge.Qt.desktop`).
 
 ```bash
 iphonebridge-qt
@@ -189,6 +237,8 @@ The `iphonebridge` command does everything the app does, plus setup and diagnost
 | `iphonebridge pair-setup` | First-run wizard — find the paired iPhone, write config |
 | `iphonebridge sms-list` | Recent messages — `-n N`, `--from <contact>`, `--source iphone\|local` |
 | `iphonebridge sms-send <to> <body>` | Send an SMS / iMessage (`<to>` = number or contact name) |
+| `iphonebridge backup-sync` | Import full history + attachments from a USB iOS backup |
+| `iphonebridge backup-wifi` | Allow backups over Wi-Fi after the first USB trust |
 | `iphonebridge call <to>` | Place a phone call over HFP |
 | `iphonebridge calls` | List active calls |
 | `iphonebridge hangup` | Hang up the active call(s) |
@@ -198,10 +248,14 @@ The `iphonebridge` command does everything the app does, plus setup and diagnost
 | `iphonebridge version` | Print the version |
 
 ```bash
-# Recent messages — live from the iPhone, or from the daemon's own log
+# Recent messages — live from the iPhone, or from the local SQLite store
 iphonebridge sms-list -n 20
 iphonebridge sms-list --from Maddie
-iphonebridge sms-list --source local
+iphonebridge sms-list --source local   # ~/.local/state/iphonebridge/messages.sqlite
+
+# Full history (USB backup) — attachments, sent-from-phone, groups, tapbacks
+iphonebridge backup-sync
+iphonebridge backup-sync --skip-backup   # re-import the last backup on disk
 
 # Send — recipient can be a phone number OR a contact name
 iphonebridge sms-send "+15551234567" "on my way"
@@ -223,34 +277,37 @@ systemctl --user {start,stop,restart} iphonebridge
 - **Verification codes** — when a text carries a one-time / 2FA code, iphonebridge detects it and copies it to your clipboard automatically; press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. Detection needs both a verification keyword and a 4–8 digit number, so ordinary texts don't trigger it.
 - **Incoming calls** raise a notification with **Answer / Decline** buttons that act on the call directly.
 - **Sent messages** — replies you send from the desktop are recorded into conversation history, so a thread shows both sides.
+- **History** lives in **`~/.local/state/iphonebridge/messages.sqlite`**. The daemon writes every live event there; `backup-sync` merges a USB backup into the same store. The app and `sms-list --source local` read it. After upgrading to a SQLite-using build, **restart the daemon once** so new messages land in the store (an old process may still be writing only the legacy JSONL).
 
 ## 🏗️ How it works
 
 ```
-              iPhone  (paired: BR/EDR + BLE)
-   ┌──────────┬──────────┬───────────┬──────────┐
-   │ MAP      │ PBAP     │ ANCS      │ HFP      │
-   │ (OBEX)   │ (OBEX)   │ (BLE GATT)│ (oFono)  │
-   ▼          ▼          ▼           ▼
- messages   contacts   app notifs   calls
-   └──────────┴──────────┴───────────┴──────────┘
+              iPhone  (paired: BR/EDR + BLE)     Apple APNs/IDS
+   ┌──────────┬──────────┬───────────┬──────────┐      │
+   │ MAP      │ PBAP     │ ANCS      │ HFP      │  ib-imessage
+   │ (OBEX)   │ (OBEX)   │ (BLE GATT)│ (oFono)  │  (Rust helper)
+   ▼          ▼          ▼           ▼           ▼
+ messages   contacts   app notifs   calls    full iMessage
+   └──────────┴──────────┴───────────┴───────────┘
                      │
            iphonebridge daemon
          (Python · GLib · D-Bus)
                      │
         ┌────────────┼────────────┐
         ▼            ▼            ▼
-  notifications   JSONL log   D-Bus service
-  + clipboard     (history)   (CLI · Qt app)
+  notifications  messages.sqlite  D-Bus service
+  + clipboard     (FTS history)   (CLI · Qt app)
 ```
 
-- **MAP** (Message Access Profile) — read SMS/iMessage, get real-time push of new ones, and send.
+- **MAP** (Message Access Profile) — read SMS/iMessage text, real-time push of new ones, and send. No attachments, groups, or reply metadata.
+- **Direct iMessage** (`ib-imessage`) — Apple-facing transport for guids, attachments, replies, tapbacks, edits, unsends, typing, and delivery/read receipts. Optional second systemd unit.
 - **PBAP** (Phone Book Access Profile) — pull the iPhone's contacts so messages show names, not numbers.
 - **ANCS** (Apple Notification Center Service) — every app's notifications, over a BLE GATT link.
 - **HFP** (Hands-Free Profile) — take and place calls; oFono speaks the HFP protocol, PipeWire's oFono backend carries the call audio to the laptop's mic/speakers.
-- One daemon, pluggable **sinks** (desktop popups, verification-code clipboard copy, append-only JSONL log), and a **D-Bus service** so the CLI and the Qt app can send messages, control calls, and subscribe to a live event feed.
+- **Backup import** — `iphonebridge backup-sync` fills gaps MAP cannot carry (sent-from-phone, media, full history).
+- One daemon, pluggable **sinks** (desktop popups, verification-code clipboard copy, SQLite message store), and a **D-Bus service** so the CLI and the Qt app can send messages, control calls, and subscribe to a live event feed.
 
-Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md).
+Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md). Agent/contributor notes are in [`AGENTS.md`](AGENTS.md).
 
 ## 🩺 Troubleshooting
 
@@ -294,21 +351,44 @@ Install a clipboard tool: `sudo apt install wl-clipboard` (Wayland) or `xclip` (
 The CLI lives in the venv. Either `source .venv/bin/activate`, or create the `~/.local/bin` symlink from install step 2.
 </details>
 
+<details>
+<summary><b>App history is empty / missing recent messages</b></summary>
+
+1. Confirm the store exists: `ls -la ~/.local/state/iphonebridge/messages.sqlite`
+2. **Restart the daemon** after upgrading — only a process started with `SqliteSink`
+   writes live events into SQLite (`systemctl --user restart iphonebridge`).
+3. For older sent-from-phone messages and media, run `iphonebridge backup-sync`.
+4. Restart the app if it was open during a large import.
+</details>
+
+<details>
+<summary><b>iMessage attachments / tapbacks never appear</b></summary>
+
+Those need the **direct iMessage helper**, not MAP. Check
+`systemctl --user status iphonebridge-imessage` and
+`journalctl --user -u iphonebridge-imessage -f`. If you also run OpenBubbles, stop one
+of them — they cannot share the same Apple push token.
+</details>
+
 ## 🚧 Limitations
 
-These are Apple's Bluetooth-stack limits, not bugs:
+**Over Bluetooth MAP alone** (no direct iMessage helper, no backup import):
 
-- No iMessage **attachments, reactions, read receipts, or typing indicators** (MAP doesn't carry them).
-- No **group iMessage / MMS / RCS** — MAP is 1-to-1 only.
-- **Messages composed on the iPhone itself don't sync** — iOS exposes only your *inbox* over MAP, never the sent folder. Replies you send *from* iphonebridge are recorded into conversation history; texts you type on the phone aren't visible to any Bluetooth bridge.
-- HFP calls are **1-to-1 voice only** — no conference calls, no FaceTime (HFP carries neither).
+- No attachments, reactions, read receipts, typing indicators, or reply threading.
+- No group iMessage / MMS / RCS — MAP is 1-to-1 text only.
+- Messages you type *on the iPhone* do not appear — iOS exposes the inbox, not the sent folder.
+
+**With the direct iMessage helper and/or `backup-sync`**, those gaps close for iMessage threads. Remaining limits:
+
+- HFP calls are **1-to-1 voice only** — no conference calls, no FaceTime.
 - Notification *bodies* are subject to the iPhone's "Show Previews" setting.
+- Apple does not replay traffic missed while the APNs connection is down; only a later backup import recovers those messages.
+- SMS/MMS that never go through Apple remain MAP-limited unless present in an iOS backup.
 
 ## 🗺️ Roadmap
 
-- **Flatpak** for the UI — a draft manifest lives in [`packaging/flatpak/`](packaging/flatpak/); it still needs a build pass.
-
-See [`BACKLOG.md`](BACKLOG.md).
+- **Flatpak** for the UI — draft manifest in [`packaging/flatpak/`](packaging/flatpak/) still targets the removed GTK app; needs a Qt rewrite.
+- Encrypted message store, multi-device support — see [`BACKLOG.md`](BACKLOG.md).
 
 ## 🙏 Credits
 

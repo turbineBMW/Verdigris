@@ -139,6 +139,7 @@ class MessagesService(dbus.service.Object):
         on_refresh_contacts=None,
         on_state=None,
         on_thread_read=None,
+        on_active_thread=None,
         imessage=None,
     ):
         super().__init__(bus_name, OBJECT_PATH)
@@ -163,6 +164,10 @@ class MessagesService(dbus.service.Object):
         self._on_state = on_state
         # on_thread_read(peer) — the UI opened a conversation. Local only.
         self._on_thread_read = on_thread_read
+        # on_active_thread(peer, focused) — which conversation is on screen and
+        # whether the app window is focused. Used to suppress popups for a
+        # thread the user is already looking at.
+        self._on_active_thread = on_active_thread
 
     # ---- Messages1 ------------------------------------------------------
 
@@ -376,7 +381,7 @@ class MessagesService(dbus.service.Object):
         except Exception:
             log.exception("failed to echo local %s (it was still sent)", state)
         # The bus signal is live-only; without this, our own edit vanishes on
-        # the next restart because nothing rewrote events.jsonl.
+        # the next restart because nothing rewrote the message store.
         if self._on_state is not None:
             try:
                 self._on_state(target_guid, state, handle, ts, body)
@@ -459,6 +464,27 @@ class MessagesService(dbus.service.Object):
         except Exception:
             log.exception("DismissNotifications(%s) failed", peer)
             return 0
+
+    @dbus.service.method(IFACE, in_signature="sb", out_signature="")
+    def SetActiveThread(self, peer: str, focused: bool) -> None:
+        """Tell the daemon which conversation is open and whether we are focused.
+
+        When `focused` is true and a message arrives for `peer`, desktop
+        notifications for that conversation are suppressed — the UI already
+        shows it. When the window loses focus (minimized, other workspace,
+        covered), pass focused=false so new messages still notify even if
+        the same thread remains selected.
+
+        `peer` is a 1:1 handle, a comma-separated handle list, or a group
+        thread key (`imessage-group:…`). Empty peer clears the active set.
+        Local only; does not MarkRead.
+        """
+        if self._on_active_thread is None:
+            return
+        try:
+            self._on_active_thread(str(peer or ""), bool(focused))
+        except Exception:
+            log.exception("SetActiveThread(%r, %s) failed", peer, focused)
 
     @dbus.service.method(IFACE, in_signature="", out_signature="s")
     def IMessageStatus(self) -> str:

@@ -27,6 +27,7 @@ from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.avatars import circular as circular_avatar
 from iphonebridge.bus import session_bus
 from iphonebridge.events import SmsEvent, normalize_phone
+from iphonebridge.imessage.handles import GROUP_KEY_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -74,17 +75,26 @@ class LibnotifySink:
         # Optional HfpManager — when present, incoming-call popups carry
         # Answer / Decline action buttons wired straight to it.
         self._hfp = hfp
-        # send_message(recipient, body) — enables inline reply straight from
-        # the notification, which Plasma supports natively.
+        # send_message(recipient, body, reply_to_guid="", target_text="") —
+        # enables inline reply straight from the notification, which Plasma
+        # supports natively. reply_to_guid threads the reply under the
+        # message that raised the popup (group or 1:1).
         self._send_message = send_message
         # ContactsResolver — used to put the sender's photo on the popup.
         self._contacts = contacts
-        # notification_id → phone number, so a reply knows who to answer.
-        self._reply_targets: dict[int, str] = {}
+        # notification_id → reply context (recipient, optional reply_to_guid).
+        self._reply_targets: dict[int, dict] = {}
         # normalized peer → the notification ids currently on screen for them.
         # Opening that conversation in the UI is a read, and reading is what
         # these popups are waiting for — see `dismiss_for`.
         self._peer_notifs: dict[str, set[int]] = {}
+        # Conversation the UI is looking at right now. Peer keys for 1:1 /
+        # speakers, chat keys for groups (see `set_active_thread`). When the
+        # app window is also focused, handle() skips Notify for that
+        # conversation — the message is already on screen.
+        self._active_peers: set[str] = set()
+        self._active_chat_keys: set[str] = set()
+        self._app_focused: bool = False
         self._notif = dbus.Interface(
             session_bus.get_object(
                 "org.freedesktop.Notifications",
@@ -179,6 +189,88 @@ class LibnotifySink:
             log.info("closed %d popup(s) for %s (thread opened)", closed, peer)
         return closed
 
+    def set_active_thread(self, peer: str, focused: bool) -> None:
+        """UI is looking at `peer` (or nothing) with window focus `focused`.
+
+        When focused and peer matches an arriving message, handle() skips the
+        desktop popup — the conversation is already on screen. Unfocused
+        still notifies, even for the open thread (minimized, other workspace,
+        another window on top).
+
+        `peer` is either:
+          • a 1:1 handle (or comma-separated handles, same shape as dismiss)
+          • a group thread key (`imessage-group:…` or a backup chat.guid).
+            Group keys themselves contain commas, so they are never split.
+        Empty peer, or focused=False, clears the active set.
+        """
+        self._app_focused = bool(focused)
+        self._active_peers = set()
+        self._active_chat_keys = set()
+        if not focused or not (peer or "").strip():
+            return
+        peer = peer.strip()
+        # Group keys embed commas between participants — treat the whole
+        # string as one chat identity rather than a multi-handle list.
+        if peer.startswith(GROUP_KEY_PREFIX) or ";+;" in peer or ";-;" in peer:
+            self._active_chat_keys.add(peer)
+            if peer.startswith(GROUP_KEY_PREFIX):
+                for part in peer[len(GROUP_KEY_PREFIX):].split(","):
+                    k = self._peer_key(part)
+                    if k:
+                        self._active_peers.add(k)
+            return
+        for p in peer.split(","):
+            p = p.strip()
+            if not p:
+                continue
+            # Bare chat guids / keys that aren't multi-handle lists.
+            if p.startswith(GROUP_KEY_PREFIX) or ";+;" in p or ";-;" in p:
+                self._active_chat_keys.add(p)
+                continue
+            k = self._peer_key(p)
+            if k:
+                self._active_peers.add(k)
+
+    def _should_suppress(self, event: SmsEvent) -> bool:
+        """True when the UI already has this conversation focused on screen."""
+        if not self._app_focused:
+            return False
+        if not self._active_peers and not self._active_chat_keys:
+            return False
+        if event.chat_guid and event.chat_guid in self._active_chat_keys:
+            return True
+        for handle in (event.sender_phone, event.sender_phone_norm):
+            key = self._peer_key(handle)
+            if key is not None and key in self._active_peers:
+                return True
+        return False
+
+    @staticmethod
+    def _reply_context(event: SmsEvent) -> dict | None:
+        """Where an inline notification reply should go.
+
+        1:1: send to the person who messaged us. Group: post into the group
+        (every other participant) as a threaded reply to *their* message, so
+        the reply lands under that sender rather than as a bare group send or
+        a private 1:1 to them.
+        """
+        sender = event.sender_phone or event.sender_phone_norm
+        chat = event.chat_guid or ""
+        if chat.startswith(GROUP_KEY_PREFIX):
+            # Participants encoded in the group key (us already stripped).
+            parts = [p for p in chat[len(GROUP_KEY_PREFIX):].split(",") if p]
+            recipient = ",".join(parts) if parts else sender
+        else:
+            recipient = sender
+        if not recipient:
+            return None
+        return {
+            "recipient": recipient,
+            "sender": sender or "",
+            "reply_to_guid": event.guid or "",
+            "target_text": (event.body or "")[:_BODY_LIMIT],
+        }
+
     @staticmethod
     def _base_hints() -> dict:
         return {
@@ -205,6 +297,13 @@ class LibnotifySink:
         # Don't pop a desktop notification for a message we ourselves sent.
         if event.kind == "sms_sent":
             return
+        # Conversation already open and the window has focus — the message
+        # is on screen, so a popup would only interrupt. Still notify when
+        # the app is in the background (other workspace / minimized / covered).
+        if self._should_suppress(event):
+            log.debug("suppressed popup for focused thread (%s)",
+                      event.sender_phone or event.chat_guid or "?")
+            return
         # No emoji prefix — the app icon already identifies these, and the
         # sender's name reads better on its own.
         title = event.display_sender
@@ -222,8 +321,8 @@ class LibnotifySink:
 
         # Plasma renders a real reply box when this action is present.
         actions: list[str] = []
-        recipient = event.sender_phone or event.sender_phone_norm
-        if self._send_message is not None and recipient:
+        reply = self._reply_context(event)
+        if self._send_message is not None and reply is not None:
             actions = ["inline-reply", "Reply"]
             hints["x-kde-reply-placeholder-text"] = dbus.String(
                 f"Reply to {event.display_sender}…")
@@ -247,11 +346,13 @@ class LibnotifySink:
             log.error("libnotify Notify failed: %s", e.get_dbus_name())
             return
 
-        if recipient:
-            self._reply_targets[nid] = recipient
+        if reply is not None:
+            self._reply_targets[nid] = reply
         # Keyed on the sender, not the thread: a group message notifies as the
         # person who sent it, and that is the handle the UI will hand back.
-        peer_key = self._peer_key(recipient) or self._peer_key(
+        sender = (reply or {}).get("sender") or event.sender_phone \
+            or event.sender_phone_norm
+        peer_key = self._peer_key(sender) or self._peer_key(
             event.sender_phone_norm)
         if peer_key:
             self._peer_notifs.setdefault(peer_key, set()).add(nid)
@@ -350,13 +451,20 @@ class LibnotifySink:
             nid_i = int(nid)
         except (TypeError, ValueError):
             return
-        recipient = self._reply_targets.get(nid_i)
+        target = self._reply_targets.get(nid_i)
         body = str(text).strip()
-        if not recipient or not body or self._send_message is None:
+        if not target or not body or self._send_message is None:
             return
+        recipient = target.get("recipient") or ""
+        if not recipient:
+            return
+        reply_to = target.get("reply_to_guid") or ""
+        target_text = target.get("target_text") or ""
         try:
-            self._send_message(recipient, body)
-            log.info("sent inline reply to %s (%d chars)", recipient, len(body))
+            self._send_message(recipient, body, reply_to, target_text)
+            log.info("sent inline reply to %s (%d chars%s)",
+                     recipient, len(body),
+                     f", reply_to={reply_to}" if reply_to else "")
         except Exception:
             log.exception("inline reply failed")
 
@@ -411,7 +519,14 @@ class LibnotifySink:
 
         message_path = self._pending.pop(nid_i, None)
         target = self._reply_targets.pop(nid_i, None)
-        key = self._peer_key(target)
+        # Reply targets are dicts (recipient + optional reply_to); older
+        # code stored a bare phone string. Either way, bookkeeping keys on
+        # the person who raised the popup — the speaker, not the group.
+        if isinstance(target, dict):
+            peer_handle = target.get("sender") or target.get("recipient")
+        else:
+            peer_handle = target
+        key = self._peer_key(peer_handle)
         if key is not None:
             bucket = self._peer_notifs.get(key)
             if bucket is not None:

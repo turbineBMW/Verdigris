@@ -123,3 +123,84 @@ def test_malformed_payload_does_not_raise():
     store, msg = _store_with_message()
     _apply(store, "{not json")
     assert msg["attachments"] == []
+
+
+def _rows_store() -> ThreadStore:
+    s = ThreadStore.__new__(ThreadStore)
+    s._threads = {}
+    s._current = None
+    s._by_guid = {}
+    s._highlight_event_id = 0
+    return s
+
+
+def _row_msg(body: str, atts: list[dict]) -> dict:
+    return {
+        "body": body,
+        "ts": "2026-07-30T21:50:07+00:00",
+        "outgoing": False,
+        "reactions": {},
+        "attachments": atts,
+        "guid": "g1",
+        "reply_to": "",
+        "sender_name": "",
+        "sender_phone": "",
+        "edits": [],
+        "event_id": 0,
+    }
+
+
+def test_file_url_percent_encodes_spaces():
+    """Spaces in attachment paths must not produce a broken Image source."""
+    from iphonebridge.qtui.models import _file_url
+
+    assert _file_url("/tmp/my photo.png") == "file:///tmp/my%20photo.png"
+    assert _file_url("") == ""
+    assert _file_url(None) == ""
+    assert _file_url("/tmp/x.png") == "file:///tmp/x.png"
+
+
+def test_image_row_without_mime_uses_extension():
+    """Empty mime + .jpg path still draws as an image, not a paperclip chip."""
+    store = _rows_store()
+    rows = store._rows_for(_row_msg("", [{
+        "path": "/tmp/photo.jpg",
+        "name": "photo.jpg",
+        "mime": "",
+        "is_sticker": False,
+        "w": 100,
+        "h": 80,
+    }]), None)
+    assert [r["kind"] for r in rows] == ["image"]
+    assert rows[0]["image"] == "file:///tmp/photo.jpg"
+    # Name kept so QML can fall back to a file chip if decode fails.
+    assert rows[0]["fileLabel"] == "photo.jpg"
+
+
+def test_image_without_path_is_a_file_chip_not_invisible_media():
+    """kind=image with an empty source used to vanish in QML (no chip)."""
+    store = _rows_store()
+    rows = store._rows_for(_row_msg("", [{
+        "path": "",
+        "name": "x.png",
+        "mime": "image/png",
+        "is_sticker": False,
+    }]), None)
+    assert [r["kind"] for r in rows] == ["file"]
+    assert rows[0]["fileLabel"] == "x.png"
+    assert rows[0]["image"] == ""
+
+
+def test_placeholder_body_cleared_when_building_rows():
+    """Even if state left body as [name], don't caption under the photo."""
+    store = _rows_store()
+    rows = store._rows_for(_row_msg("[x.png]", [{
+        "path": "/tmp/x.png",
+        "name": "x.png",
+        "mime": "image/png",
+        "is_sticker": False,
+        "w": 10,
+        "h": 10,
+    }]), None)
+    assert [r["kind"] for r in rows] == ["image"]
+    assert all(r.get("body") != "[x.png]" for r in rows)

@@ -26,6 +26,8 @@ def store():
     s._unsorted = set()
     s._current = "k"
     s._pending_receipts = {}
+    s._highlight_event_id = 0
+    s._highlight_guid = ""
     s._message_model = MessageListModel()
     s._contacts = type("C", (), {"resolve_photo": lambda self, p: None})()
     for i in range(3):

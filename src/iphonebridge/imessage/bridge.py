@@ -134,8 +134,9 @@ def _text_from_parts(parts) -> tuple[str, list[dict]]:
                 }
             )
         elif name == "Object":
-            # Inline media is already represented in the Text part as U+F00A.
-            # The attachment entry carries the bytes; nothing to splice in.
+            # Inline media is already represented in the Text part as U+F00A
+            # (the live "3-0 on my return" form). The attachment entry
+            # carries the bytes; nothing to splice into the body here.
             continue
     return "".join(chunks), attachments
 
@@ -202,12 +203,18 @@ def translate(event: dict, my_handles: set[str]) -> Translated | None:
         )
         verb = _REACTION_VERBS.get(reaction_name)
         if reaction_name == "Emoji" and reaction_payload:
-            verb = f"Reacted {reaction_payload} to"
+            # No trailing " to": the verb is what the UI reads the emoji out
+            # of, and MAP's spelling stops at the emoji. Carrying the whole
+            # clause here put a stray "to" on the badge.
+            verb = f"Reacted {reaction_payload}"
         extras.reaction_verb = verb
         target = payload.get("to_text") or ""
         # Phrased exactly like MAP's synthesized text so `_detect_reaction`
-        # in events.py picks it up and both transports render the same.
-        body = f'{verb or "Reacted to"} “{target}”'
+        # in events.py picks it up and both transports render the same. The
+        # emoji form takes the "to" the verb no longer carries.
+        lead = f"{verb} to" if reaction_name == "Emoji" and verb else verb
+        lead = lead or "Reacted to"
+        body = f'{lead} “{target}”'
 
     elif name == "Edit" and isinstance(payload, dict):
         extras.edited_from_guid = payload.get("tuuid")

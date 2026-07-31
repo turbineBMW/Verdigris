@@ -40,6 +40,18 @@ _TAPBACK_TYPES = {
     3004: "Removed an exclamation from", 3005: "Removed a question mark from",
 }
 
+# iOS 18 added the arbitrary-emoji tapback, which is type 2006 (3006 to take
+# it back) with the emoji itself in `associated_message_emoji` — there is no
+# verb for it, since there are as many of these as there are emoji. Left out
+# of `_TAPBACK_TYPES`, these imported as ordinary messages: the conversation
+# grew a literal bubble reading 'Reacted 😋 to "…"' instead of a badge.
+_EMOJI_TAPBACK = 2006
+_EMOJI_TAPBACK_REMOVED = 3006
+# What a withdrawn emoji tapback is called downstream. The six classic verbs
+# each have their own removal phrasing because MAP synthesizes one; this kind
+# never reaches MAP, so it only needs a name the UI recognizes.
+REMOVED_EMOJI_VERB = "Removed a reaction from"
+
 
 def apple_time(value) -> datetime | None:
     """Convert a Core Data timestamp to an aware datetime."""
@@ -174,6 +186,7 @@ def read_messages(db_path: str | Path, *, limit: int | None = None
                    {col('service')}      AS service,
                    {col('associated_message_type')} AS associated_message_type,
                    {col('associated_message_guid')} AS associated_message_guid,
+                   {col('associated_message_emoji')} AS associated_message_emoji,
                    {col('thread_originator_guid')}  AS thread_originator_guid,
                    h.id                  AS handle,
                    c.ROWID               AS chat_rowid,
@@ -204,10 +217,19 @@ def read_messages(db_path: str | Path, *, limit: int | None = None
             text = text or decode_attributed_body(r["attributedBody"])
             atype = r["associated_message_type"] or 0
             verb = _TAPBACK_TYPES.get(int(atype)) if atype else None
+            if verb is None and atype in (_EMOJI_TAPBACK,
+                                          _EMOJI_TAPBACK_REMOVED):
+                emoji = (r["associated_message_emoji"] or "").strip()
+                if emoji:
+                    verb = (f"Reacted {emoji}" if atype == _EMOJI_TAPBACK
+                            else REMOVED_EMOJI_VERB)
             target = r["associated_message_guid"]
             if target:
-                # Stored as "p:0/<guid>" or "bp:<guid>" — keep the guid.
-                target = target.split("/")[-1]
+                # Stored as "p:0/<guid>", "bp:<guid>", or bare. Splitting on
+                # "/" alone left the "bp:" form prefixed, so those tapbacks
+                # named a guid nothing matched and silently went nowhere —
+                # 323 of them in one real history.
+                target = target.split("/")[-1].split(":")[-1]
             out.append(BackupMessage(
                 guid=r["guid"],
                 text=text,

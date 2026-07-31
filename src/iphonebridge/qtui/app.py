@@ -15,6 +15,7 @@ from pathlib import Path
 from PySide6.QtCore import (
     Q_ARG,
     Property,
+    QEvent,
     QMetaObject,
     QObject,
     Qt,
@@ -154,9 +155,15 @@ class MainWindow(QMainWindow):
     parentless QMenuBar would never be picked up.
     """
 
-    def __init__(self, quick: QQuickWidget, state: DaemonState) -> None:
+    def __init__(
+        self,
+        quick: QQuickWidget,
+        state: DaemonState,
+        store: ThreadStore | None = None,
+    ) -> None:
         super().__init__()
         self._state = state
+        self._store = store
         self.setWindowTitle("Messages")
         self.resize(980, 680)
         self.setMinimumSize(560, 380)
@@ -179,10 +186,22 @@ class MainWindow(QMainWindow):
             self._blur_done = True
             self._enable_blur()
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        # Tell the daemon whether we are the focused window so it can skip
+        # desktop popups for the open conversation when the user is already
+        # looking at it — and still notify when we are in the background.
+        if event.type() == QEvent.Type.ActivationChange and self._store is not None:
+            self._store.setWindowFocused(self.isActiveWindow())
+
     def bind_root(self) -> None:
         """Called once the QML scene has loaded."""
         self._root = self._quick.rootObject()
         self._build_menu()
+        # Seed focus state: ActivationChange only fires on transitions, and
+        # we start focused when first shown.
+        if self._store is not None:
+            self._store.setWindowFocused(self.isActiveWindow())
 
     def _build_menu(self) -> None:
         """The macOS Tahoe Messages menu bar, as far as we can honour it.
@@ -257,7 +276,7 @@ class MainWindow(QMainWindow):
             act = edit.addAction(label)
             act.setShortcut(key)
             act.triggered.connect(lambda _c=False, a=action: self._menu(a))
-        edit.addSeparator()
+        # Ctrl+F focuses the sidebar search field in the main window.
         find = edit.addAction("Find…")
         find.setShortcut(QKeySequence.StandardKey.Find)
         find.triggered.connect(lambda: self._menu("find"))
@@ -634,7 +653,7 @@ def main() -> int:
     quick.engine().addImportPath(str(_QML_DIR))
     # The window must exist before the QML loads, since the scene binds to
     # its window controls.
-    win = MainWindow(quick, state)
+    win = MainWindow(quick, state, store)
     controls = WindowControls(win)
 
     ctx = quick.rootContext()

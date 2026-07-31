@@ -4,6 +4,18 @@
 
 Two subsystems that did not exist at 0.1.0, plus the app that renders them.
 
+### Changed
+- **Message history is SQLite** (`~/.local/state/iphonebridge/messages.sqlite`).
+  The daemon (`SqliteSink`) and `backup-sync` write one store; the Qt UI and
+  `sms-list --source local` read it. Legacy `events.jsonl` / `backup_events.jsonl`
+  are imported once on first open. Incremental UI sync uses a max-id cursor plus a
+  `write_seq` meta counter so upserts/edits are not missed.
+- **Paged conversations + FTS search.** Cold start loads the thread list only; opening a
+  chat pages recent messages from SQLite (scroll up for older). Search is the **sidebar
+  field** (type-as-you-go FTS5 over bodies); **Edit → Find…** / Ctrl+F focuses that
+  field. Hits replace the thread list (one row per match, highlighted preview) and open
+  the bubble. There is no separate Search menu or Find dialog.
+
 ### Added
 - **Direct iMessage transport** (`ib-imessage`, Rust) — speaks to Apple through
   rustpush over its own systemd unit, giving guids, replies, edits, unsends,
@@ -17,20 +29,65 @@ Two subsystems that did not exist at 0.1.0, plus the app that renders them.
   across differing transports.
 - Delivery/read state and edit history persisted as `message_state` rows, so
   captions and post-edit text survive a restart.
+- Any emoji can be sent as a tapback, not only the classic six: the bubble
+  menu's reaction row gained a picker with search over the whole emoji table.
+- A message shows every tapback on it, one per person, as an overlapping
+  cluster of emoji. Reacting again replaces that person's; their removal takes
+  only theirs off.
 
 ### Fixed
-- True inline media (U+F00A in the body, e.g. "3-0 on my return") is drawn
+- True inline media (U+F00A in the body, e.g. "3-0 on my return") is drawn
   inside the text bubble. Free-standing Bitmoji/peels (U+FFFC) stay their own
   rows, with the placeholder glyph stripped from the caption.
+- Group chats could show the last sender's name as the thread title; titles now
+  prefer `chat_name` / participants.
+- Pinned conversations keyed on display names forked after rename or MAP vs
+  guid handle mismatch; pins and 1:1 thread keys migrate toward stable
+  `tel:+…` (or email) handles.
+- Duplicate threads for the same person (MAP transfer id vs `guid:…`) are
+  folded on materialize when a guid handle exists.
+- After the SQLite switch, a long-running daemon still writing JSONL left the
+  UI missing the newest hour until restart — durable history is `SqliteSink`
+  only; restart once after upgrade.
+- App crash / fail-to-reopen from a `_watcher` reference used before create and
+  from double `onContentYChanged` handlers fighting scroll restore.
+- Tapback badges are the emoji itself rather than one of six icons, so an
+  arbitrary-emoji reaction is no longer a special case pasted into an empty
+  bubble — and taking a reaction back on the phone now clears the badge, where
+  every "Removed a … from" used to render as the reaction it undid.
+- A message could only hold one reaction: the second person to react replaced
+  the first, silently, on both the live and the backup path.
+- iOS 18 emoji tapbacks (`associated_message_type` 2006) were imported from
+  `sms.db` as ordinary messages, so a conversation grew literal bubbles reading
+  `Reacted 😋 to "…"` instead of badges — 737 of them in one real history.
+- Tapbacks whose target was stored as `bp:<guid>` kept the prefix and matched
+  nothing, so 323 more went nowhere.
+- A live emoji tapback carried rustpush's whole clause as its verb, which put
+  a stray "to" on the badge.
+- Reactions arriving over the native transport were matched to their target by
+  quoted text, ignoring the exact guid the transport supplies.
+- Right-clicking a second message while a bubble menu was open only dismissed
+  the first one, so every other message looked like it could not be reacted to.
+  The menu is no longer modal and the page dismisses it, leaving the press free
+  to reach the bubble under it.
+- The unread dot on a pinned tile sat out at the tile's edge and pushed the
+  thread name off centre.
 - A reset APNs connection left the helper alive and serving with nothing behind
   it: sends still worked and status still read "available" while no inbound
   message arrived again. The helper now exits so systemd rebuilds the
   connection, and the daemon treats the loss as loss of transport.
 - Desktop notifications never closed on the iMessage path. The only automatic
   close was a BlueZ MAP property change, which an iMessage does not produce.
+- Cleared unread badges (especially on pinned tiles) came back after restart:
+  cold-start recount compared ISO timestamps as strings, so a UTC-spelled
+  earlier message sorted after a local-offset read mark and looked new.
 
 ### Removed
 - The GTK4/libadwaita app and its desktop entry.
+- The tapback icon SVGs (two mirrored sets of seven), now that the badge draws
+  the emoji.
+- Global-menu **Search** submenu / standalone Find dialog (search lives in the
+  Messages sidebar only).
 
 ## [0.1.0] — 2026-05-19
 

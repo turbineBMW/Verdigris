@@ -8,7 +8,7 @@ The daemon owns `com.gabriel.iphonebridge` on the session bus. This client:
     Qt signals the QML layer binds to;
   • calls its methods (Messages1.Send, Calls1.Dial/Answer/Hangup, …)
     asynchronously so the UI never blocks;
-  • reads message history straight from the daemon's events.jsonl.
+  • reads message history from the SQLite message store (messages.sqlite).
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from PySide6.QtDBus import (
 )
 
 from iphonebridge import config
+from iphonebridge.message_store import MessageStore
 
 log = logging.getLogger(__name__)
 
@@ -250,6 +251,16 @@ class DaemonClient(QObject):
         self._call_async(MESSAGES_IFACE, "DismissNotifications", [peers],
                          lambda *_: None, lambda *_: None)
 
+    def set_active_thread(self, peer: str, focused: bool) -> None:
+        """Tell the daemon which conversation is open and if we are focused.
+
+        Fire-and-forget: used to suppress new-message popups for a thread that
+        is already on screen. See Messages1.SetActiveThread.
+        """
+        self._call_async(MESSAGES_IFACE, "SetActiveThread",
+                         [peer or "", bool(focused)],
+                         lambda *_: None, lambda *_: None)
+
     def imessage_status(self) -> dict:
         """Whether the native transport is up, our handles, expiry warnings.
 
@@ -308,30 +319,37 @@ class DaemonClient(QObject):
         except ValueError:
             return []
 
-    # ---- history (read straight from the daemon's state files) ----------
+    # ---- history (SQLite message store) ---------------------------------
 
     @staticmethod
     def read_events(kinds: set[str] | None = None,
-                    limit: int | None = None) -> list[dict]:
-        """Parse events.jsonl, oldest-first. Optionally filter by `kind`."""
-        path = config.EVENTS_JSONL
-        out: list[dict] = []
-        if not path.exists():
-            return out
+                    limit: int | None = None,
+                    after_id: int = 0) -> list[dict]:
+        """Read message history from messages.sqlite, oldest-first.
+
+        Optionally filter by `kind`. With `limit` and no `after_id`, returns
+        the newest N events (still oldest-first). `after_id` is for the UI's
+        incremental disk sync.
+        """
         try:
-            for line in path.read_text(errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if kinds and ev.get("kind") not in kinds:
-                    continue
-                out.append(ev)
-        except OSError as e:
-            log.warning("could not read %s: %s", path, e)
-        if limit is not None:
-            out = out[-limit:]
-        return out
+            return MessageStore().read_events(
+                kinds, after_id=after_id, limit=limit
+            )
+        except Exception as e:
+            log.warning("could not read message store: %s", e)
+            return []
+
+    @staticmethod
+    def read_events_with_ids(
+        kinds: set[str] | None = None,
+        limit: int | None = None,
+        after_id: int = 0,
+    ) -> list[tuple[int, dict]]:
+        """Like read_events, but each item is `(row_id, event)` for cursors."""
+        try:
+            return MessageStore().read_events_with_ids(
+                kinds, after_id=after_id, limit=limit
+            )
+        except Exception as e:
+            log.warning("could not read message store: %s", e)
+            return []

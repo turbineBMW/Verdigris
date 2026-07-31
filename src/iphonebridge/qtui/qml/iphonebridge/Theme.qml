@@ -40,7 +40,7 @@ QtObject {
     readonly property color accent:        "#2f8fff"
     readonly property color selection:     "#0a72e8"
 
-    // Icons and reaction SVGs live in qtui/assets/ (sibling of qml/).
+    // Icons live in qtui/assets/ (sibling of qml/).
     // Theme.qml is at qml/iphonebridge/, so two levels up lands on qtui/.
     function assetUrl(name) {
         return Qt.resolvedUrl("../../assets/" + name)

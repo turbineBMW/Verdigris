@@ -1,27 +1,36 @@
 """Delivery/edit state must reach disk so a restart rebuilds captions/text."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-from iphonebridge.sinks.jsonl import JsonlSink
+from iphonebridge.message_store import STATE_KINDS, MessageStore
+from iphonebridge.sinks.sqlite import SqliteSink
 
 
 @pytest.fixture
-def sink(tmp_path: Path):
-    return JsonlSink(path=tmp_path / "events.jsonl")
+def sink(tmp_path: Path, monkeypatch):
+    from iphonebridge import config
+
+    db = tmp_path / "messages.sqlite"
+    monkeypatch.setattr(config, "MESSAGES_DB", db)
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(config, "EVENTS_JSONL", tmp_path / "events.jsonl")
+    monkeypatch.setattr(
+        config, "BACKUP_EVENTS_JSONL", tmp_path / "backup_events.jsonl"
+    )
+    return SqliteSink(path=db)
 
 
-def test_delivery_state_is_written(sink: JsonlSink, tmp_path: Path):
+def test_delivery_state_is_written(sink: SqliteSink):
     sink.handle_state({
         "guid": "G1",
         "state": "delivered",
         "handle": "tel:+1555",
         "timestamp": "2026-07-30T12:00:00+00:00",
     })
-    rows = [json.loads(line) for line in sink.path.read_text().splitlines()]
+    rows = sink.store.read_events(kinds=set(STATE_KINDS))
     assert len(rows) == 1
     assert rows[0]["kind"] == "message_state"
     assert rows[0]["state"] == "delivered"
@@ -30,7 +39,7 @@ def test_delivery_state_is_written(sink: JsonlSink, tmp_path: Path):
     assert rows[0]["handle"].startswith("state:")
 
 
-def test_edit_state_carries_body(sink: JsonlSink):
+def test_edit_state_carries_body(sink: SqliteSink):
     sink.handle_state({
         "guid": "G1",
         "state": "edited",
@@ -38,12 +47,12 @@ def test_edit_state_carries_body(sink: JsonlSink):
         "timestamp": "2026-07-30T12:00:00+00:00",
         "body": "see you at 6",
     })
-    row = json.loads(sink.path.read_text().strip())
+    row = sink.store.read_events(kinds=set(STATE_KINDS))[0]
     assert row["state"] == "edited"
     assert row["body"] == "see you at 6"
 
 
-def test_typing_is_not_persisted(sink: JsonlSink):
+def test_typing_is_not_persisted(sink: SqliteSink):
     sink.handle_state({
         "guid": "",
         "state": "typing",
@@ -56,8 +65,7 @@ def test_typing_is_not_persisted(sink: JsonlSink):
         "handle": "tel:+1555",
         "timestamp": "2026-07-30T12:00:01+00:00",
     })
-    # File is only created on a real write — typing must not create it.
-    assert not sink.path.exists()
+    assert sink.store.count(kinds=set(STATE_KINDS)) == 0
 
 
 @pytest.mark.skipif(
@@ -69,8 +77,17 @@ def test_ui_reloads_edit_and_delivery_from_disk(tmp_path: Path, monkeypatch):
     from iphonebridge import config
     from iphonebridge.qtui.models import ThreadStore
 
-    log = tmp_path / "events.jsonl"
-    rows = [
+    db = tmp_path / "messages.sqlite"
+    monkeypatch.setattr(config, "MESSAGES_DB", db)
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(config, "EVENTS_JSONL", tmp_path / "events.jsonl")
+    monkeypatch.setattr(
+        config, "BACKUP_EVENTS_JSONL", tmp_path / "backup_events.jsonl"
+    )
+
+    store = MessageStore(db)
+    store.open()
+    for row in (
         {
             "kind": "sms_sent",
             "handle": "h1",
@@ -99,22 +116,27 @@ def test_ui_reloads_edit_and_delivery_from_disk(tmp_path: Path, monkeypatch):
             "timestamp": "2026-07-30T12:02:00+00:00",
             "body": "",
         },
-    ]
-    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-    monkeypatch.setattr(config, "EVENTS_JSONL", log)
-    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    ):
+        store.upsert_event(row)
+    store.close()
 
     class FakeClient:
-        def read_events(self, kinds=None, limit=None):
+        def read_events(self, kinds=None, limit=None, after_id=0):
             from iphonebridge.qtui.client import DaemonClient
-            return DaemonClient.read_events(kinds=kinds, limit=limit)
+            return DaemonClient.read_events(
+                kinds=kinds, limit=limit, after_id=after_id
+            )
 
-        # ThreadStore connects these; unused here.
+        def read_events_with_ids(self, kinds=None, limit=None, after_id=0):
+            from iphonebridge.qtui.client import DaemonClient
+            return DaemonClient.read_events_with_ids(
+                kinds=kinds, limit=limit, after_id=after_id
+            )
+
         messageReceived = type("S", (), {"connect": lambda *a, **k: None})()
         messageSent = messageReceived
         messageStateChanged = messageReceived
 
-    # Minimal construction: bypass __init__ side effects where possible.
     s = ThreadStore.__new__(ThreadStore)
     s._threads = {}
     s._by_phone = {}
@@ -125,13 +147,17 @@ def test_ui_reloads_edit_and_delivery_from_disk(tmp_path: Path, monkeypatch):
     s._current = ""
     s._read_marks = {}
     s._pending_receipts = {}
+    s._last_event_id = 0
     s._client = FakeClient()
 
-    # Exercise the same two-pass load history uses.
-    for ev in s._client.read_events(kinds={"sms_received", "sms_sent"}):
+    for rid, ev in s._client.read_events_with_ids(
+        kinds={"sms_received", "sms_sent"}
+    ):
         s._ingest(ev, outgoing=(ev.get("kind") == "sms_sent"), refresh=False)
-    for ev in s._client.read_events(kinds={"message_state"}):
+        s._last_event_id = max(s._last_event_id, rid)
+    for rid, ev in s._client.read_events_with_ids(kinds={"message_state"}):
         s._ingest_state(ev, refresh=False)
+        s._last_event_id = max(s._last_event_id, rid)
 
     msg = s._by_guid["AAAA"]
     assert msg["body"] == "see you at 6"

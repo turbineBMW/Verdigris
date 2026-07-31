@@ -6,7 +6,7 @@ Startup order:
      (retries on Forbidden — see _try_open_sessions)
   3. ContactsResolver — warm SQLite cache; if empty, pull PBAP
   4. MapEventListener — subscribe to MAP MNS push events
-  5. Sinks — register libnotify + jsonl
+  5. Sinks — register libnotify + sqlite
   6. DBus service (com.gabriel.iphonebridge.Messages1)
   7. GLib.MainLoop().run()
 
@@ -24,7 +24,6 @@ import logging
 import re
 import signal
 import threading
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +48,7 @@ from iphonebridge.obex.map_send import send_message as map_send_message
 from iphonebridge.obex.sessions import SessionError, SessionManager
 from iphonebridge.sinks import Sink
 from iphonebridge.sinks.clipboard import ClipboardSink
-from iphonebridge.sinks.jsonl import JsonlSink
+from iphonebridge.sinks.sqlite import SqliteSink
 from iphonebridge.sinks.libnotify import LibnotifySink
 
 log = logging.getLogger(__name__)
@@ -167,6 +166,7 @@ class Daemon:
                 on_refresh_contacts=self._refresh_contacts_now,
                 on_state=self._persist_state,
                 on_thread_read=self._dismiss_notifications,
+                on_active_thread=self._set_active_thread,
                 imessage=self._imessage)
             log.info("DBus service ready: com.gabriel.iphonebridge")
             # After the D-Bus service exists, so the client can be handed to
@@ -230,11 +230,14 @@ class Daemon:
         return False
 
     def _setup_sinks(self) -> None:
-        """Register the JSONL + libnotify sinks. Independent of the OBEX
+        """Register the SQLite + libnotify sinks. Independent of the OBEX
         sessions, so ANCS/HFP events reach the desktop even in degraded mode."""
         if self.sinks:
             return
-        self.sinks.append(JsonlSink())
+        try:
+            self.sinks.append(SqliteSink())
+        except Exception:
+            log.exception("sqlite sink failed to init — history will not persist")
         try:
             self.sinks.append(LibnotifySink(
                 hfp=self.hfp,
@@ -457,22 +460,20 @@ class Daemon:
         Cheap and best-effort: a failure here costs deduplication, not
         correctness, so it must never stop the daemon from starting.
         """
-        path = config.EVENTS_JSONL
-        if not path.exists():
-            return
         try:
-            with path.open("r", errors="replace") as fh:
-                tail = deque(fh, maxlen=self._SEED_SCAN_ROWS)
-        except OSError:
+            from iphonebridge.message_store import MESSAGE_KINDS, default_store
+
+            # Newest N message rows — enough to cover Apple's replay window.
+            rows = default_store().read_events(
+                kinds=set(MESSAGE_KINDS), limit=self._SEED_SCAN_ROWS
+            )
+        except Exception:
             log.debug("could not read history to seed guid dedupe", exc_info=True)
             return
 
         seeded = 0
-        for line in tail:
-            try:
-                guid = json.loads(line).get("guid")
-            except (ValueError, AttributeError):
-                continue
+        for ev in rows:
+            guid = ev.get("guid")
             if guid and guid not in self._imessage_seen:
                 self._imessage_seen[guid] = None
                 seeded += 1
@@ -721,8 +722,8 @@ class Daemon:
 
         The result rides the state channel rather than the message channel for
         the same reason edits do: it modifies a message that already exists.
-        That also gets persistence for free — `JsonlSink.handle_state` writes
-        it to events.jsonl, so the image is still there after a restart.
+        That also gets persistence for free — `SqliteSink.handle_state` writes
+        it to messages.sqlite, so the image is still there after a restart.
         """
         atts = list(extras.attachments or [])
         guid = extras.guid or ""
@@ -740,9 +741,26 @@ class Daemon:
                 # Shaped like the backup importer's descriptors, because the
                 # UI reads one vocabulary for both sources — note `mime`, not
                 # the bridge's `mime_type`.
+                name = att.get("name") or "attachment"
+                mime = att.get("mime_type") or ""
+                # Some parts arrive with only a filename; without a mime the
+                # UI used to draw a paperclip chip for every photo. Infer the
+                # common image types from the extension as a backstop.
+                if not mime:
+                    lower = name.lower()
+                    if lower.endswith(".png"):
+                        mime = "image/png"
+                    elif lower.endswith((".jpg", ".jpeg")):
+                        mime = "image/jpeg"
+                    elif lower.endswith(".gif"):
+                        mime = "image/gif"
+                    elif lower.endswith((".heic", ".heif")):
+                        mime = "image/heic"
+                    elif lower.endswith(".webp"):
+                        mime = "image/webp"
                 meta = {
-                    "name": att.get("name") or "attachment",
-                    "mime": att.get("mime_type") or "",
+                    "name": name,
+                    "mime": mime,
                     "is_sticker": "sticker" in uti,
                 }
                 try:
@@ -845,6 +863,21 @@ class Daemon:
                 log.exception("sink %s failed to dismiss popups", sink.name)
         return closed
 
+    def _set_active_thread(self, peer: str, focused: bool) -> None:
+        """UI focus: which conversation is open and whether the window is active.
+
+        Libnotify uses this to skip popups for a thread the user is already
+        looking at. Optional sinks without the method are ignored.
+        """
+        for sink in self.sinks:
+            setter = getattr(sink, "set_active_thread", None)
+            if setter is None:
+                continue
+            try:
+                setter(peer, focused)
+            except Exception:
+                log.exception("sink %s failed to set active thread", sink.name)
+
     def _persist_state(
         self,
         guid: str,
@@ -925,12 +958,53 @@ class Daemon:
             # MAP-era format. Only the bus carries the iMessage extras.
             self._dbus_service.emit_message(event, extras)
 
-    def _send_reply(self, recipient: str, body: str) -> str:
-        """Send a message from outside the D-Bus API (inline notification
-        reply). Goes through the same MAP push and history hook as Send()."""
+    def _send_reply(
+        self,
+        recipient: str,
+        body: str,
+        reply_to_guid: str = "",
+        target_text: str = "",
+    ) -> str:
+        """Send from outside the D-Bus API (inline notification reply).
+
+        Prefers the native iMessage path so group recipients and threaded
+        replies (reply_to_guid) work; MAP can only push plain 1:1 text.
+        """
+        if self._imessage is not None:
+            try:
+                from iphonebridge.dbus_service import _reply_part
+                from iphonebridge.imessage.handles import to_handle
+
+                participants = [
+                    to_handle(r) for r in recipient.split(",") if r.strip()
+                ]
+                if not participants:
+                    raise ValueError("empty recipient")
+                if reply_to_guid:
+                    guid = self._imessage.send(
+                        participants, body,
+                        reply_guid=reply_to_guid,
+                        reply_part=_reply_part(target_text),
+                    )
+                else:
+                    guid = self._imessage.send(participants, body)
+                self._record_sent(recipient, body, guid, reply_to_guid)
+                return guid
+            except Exception as e:
+                # Fall through to MAP for plain 1:1; groups / threaded replies
+                # have no MAP equivalent, so log and re-raise those.
+                if reply_to_guid or "," in recipient:
+                    log.exception("inline reply via iMessage failed")
+                    raise
+                log.warning(
+                    "iMessage inline reply failed (%s); falling back to MAP", e
+                )
+
         if self.sessions.map is None:
             raise SessionError("MAP session not open")
-        transfer = map_send_message(self.sessions.map_path, recipient, body)
+        # MAP addresses one phone; for a multi-recipient string take the first.
+        map_to = recipient.split(",")[0].strip()
+        transfer = map_send_message(self.sessions.map_path, map_to, body)
         self._record_sent(recipient, body, transfer)
         return transfer
 

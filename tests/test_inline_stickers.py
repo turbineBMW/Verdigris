@@ -79,6 +79,9 @@ def test_f00a_inline_media_lives_in_the_text_bubble():
     assert '<img src="file:///tmp/inline.png"' in rows[0]["richBody"]
     assert "3-0 on my return" in rows[0]["richBody"]
     assert rows[0]["jumbo"] is False
+    # As tall as the bubble text (13px), not a free-standing tile.
+    assert 'height="13"' in rows[0]["richBody"]
+    assert 'width="13"' in rows[0]["richBody"]  # square 320×320
 
 
 def test_f00a_accepts_non_sticker_images():
@@ -145,3 +148,24 @@ def test_photo_without_f00a_stays_its_own_row():
     rows = store._rows_for(_msg("caption", [photo]), None)
     assert [r["kind"] for r in rows] == ["image", "text"]
     assert rows[1]["body"] == "caption"
+
+
+def test_reply_snippet_shows_inline_sticker_at_quote_height():
+    """A reply to "3-0 on my return" must quote the sticker, text-tall."""
+    store = _store()
+    parent = _msg(f"3-0 on my return{_INLINE_MEDIA}", [_image()], guid="PARENT")
+    store._by_guid = {"PARENT": parent}
+    reply = _msg("nice", [], guid="CHILD", reply_to="PARENT")
+    snippet = store._reply_snippet(reply)
+    assert "3-0 on my return" in snippet
+    assert '<img src="file:///tmp/inline.png"' in snippet
+    # Quote font is 11px in ConversationsPage — not the bubble's 13.
+    assert 'height="11"' in snippet
+    assert _INLINE_MEDIA not in snippet
+
+
+def test_reply_snippet_plain_target_stays_plain():
+    store = _store()
+    store._by_guid = {"PARENT": _msg("are you free at 6", [], guid="PARENT")}
+    reply = _msg("yes", [], reply_to="PARENT")
+    assert store._reply_snippet(reply) == "are you free at 6"

@@ -7,7 +7,6 @@ targets, reply links) that MAP could never populate.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -86,28 +85,24 @@ def _event_from(msg: BackupMessage, contacts: ContactsResolver,
     }
 
 
-# Where normalized backup events are parked for the UI to pick up. Kept
-# separate from the daemon's events.jsonl: that file is the daemon's to
-# write, and mixing sources into it would confuse ownership.
-BACKUP_EVENTS = config.STATE_DIR / "backup_events.jsonl"
+# Legacy path — still defined so one-shot migration and old docs can find it.
+# New writes go to messages.sqlite via MessageStore.
+BACKUP_EVENTS = config.BACKUP_EVENTS_JSONL
 
 
 def _write_events(events: list[dict]) -> None:
-    """Persist normalized events so the UI can merge them on next load.
+    """Persist normalized events into the SQLite message store.
 
-    Rewritten wholesale each sync — rows are keyed by GUID, so re-importing
-    is idempotent and there's nothing to append incrementally.
+    Upserted by handle (`guid:…`), so re-syncing is idempotent. The UI picks
+    up new rows via its incremental id cursor (or on next cold start).
     """
     try:
-        config.ensure_dirs()
-        tmp = BACKUP_EVENTS.with_suffix(".jsonl.tmp")
-        with tmp.open("w") as fh:
-            for ev in events:
-                fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
-        tmp.replace(BACKUP_EVENTS)          # atomic; no half-written file
-        log.info("wrote %d backup events → %s", len(events), BACKUP_EVENTS)
-    except OSError as e:
-        log.warning("could not write backup events: %s", e)
+        from iphonebridge.message_store import default_store
+
+        n = default_store().upsert_many(events, source="backup")
+        log.info("wrote %d backup events → %s", n, config.MESSAGES_DB)
+    except Exception as e:
+        log.warning("could not write backup events to SQLite: %s", e)
 
 
 _PRIMARY_UDID_FILE = config.STATE_DIR / "primary_device"

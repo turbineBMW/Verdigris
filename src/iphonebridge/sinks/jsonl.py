@@ -1,8 +1,8 @@
-"""JSONL event log sink.
+"""JSONL event log sink (optional / legacy).
 
 Appends one JSON object per line to ~/.local/state/iphonebridge/events.jsonl.
-Useful for debugging, replay-tuning future correlator logic, and as the
-durable record before SQLite catches up.
+The daemon's durable history is now `SqliteSink` / `messages.sqlite`; this
+sink remains for ad-hoc debugging if registered manually.
 """
 from __future__ import annotations
 

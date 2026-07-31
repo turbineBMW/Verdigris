@@ -51,7 +51,14 @@ Item {
         z: 1000
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onPressed: (mouse) => {
-            page.dropStrayFocus(mapToItem(null, mouse.x, mouse.y))
+            var scenePos = mapToItem(null, mouse.x, mouse.y)
+            page.dropStrayFocus(scenePos)
+            msgArea.dismissMenu(scenePos)
+            // Search / reply-quote rim is not keyboard focus — drop it on
+            // any click so it cannot stick after the user has moved on.
+            // Runs on press (before a quote's TapHandler), so a new jump
+            // still lights its target on the subsequent tap.
+            threadStore.clearHighlight()
             mouse.accepted = false
         }
     }
@@ -200,8 +207,8 @@ Item {
                         anchors {
                             left: searchIconBox.right
                             leftMargin: 7
-                            right: parent.right
-                            rightMargin: 10
+                            right: clearSearch.visible ? clearSearch.left : parent.right
+                            rightMargin: clearSearch.visible ? 4 : 10
                             verticalCenter: parent.verticalCenter
                         }
                         height: parent.height
@@ -215,17 +222,50 @@ Item {
                         placeholderTextColor: Theme.textDim
                         font.pixelSize: 12
                         verticalAlignment: TextInput.AlignVCenter
+                        // Live results: every keystroke pushes into
+                        // ThreadStore, which runs FTS off-thread and
+                        // rebinds the result list as soon as each query
+                        // returns (stale slower queries are dropped).
+                        onTextChanged: threadStore.setSearchQuery(text)
+                        Keys.onEscapePressed: {
+                            text = ""
+                            page.forceActiveFocus()
+                        }
+                    }
+
+                    // Clear the query — matches the "×" affordance in iOS search.
+                    Text {
+                        id: clearSearch
+                        anchors {
+                            right: parent.right
+                            rightMargin: 12
+                            verticalCenter: parent.verticalCenter
+                        }
+                        visible: searchField.text.length > 0
+                        text: "×"
+                        color: Theme.textDim
+                        font.pixelSize: 16
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -6
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                searchField.text = ""
+                                searchField.forceActiveFocus()
+                            }
+                        }
                     }
                 }
 
                 // Pinned conversations, avatars only — the iOS grid. Capped
                 // at nine by the store, which wraps to three rows here.
+                // Hidden while searching so results take the full list.
                 Item {
                     id: pinnedFlow
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     Layout.bottomMargin: 6
-                    visible: threadStore.pinnedCount > 0
+                    visible: threadStore.pinnedCount > 0 && !threadStore.searchActive
                     implicitHeight: visible ? pinnedGrid.height : 0
 
                     // Centre the block as a whole: lay the tiles out in a
@@ -372,42 +412,56 @@ Item {
                                     size: pinnedGrid.avatarSize
                                     source: pinTile.modelData.avatar
                                     initials: pinTile.modelData.initials
-                                    scale: pinMouse.containsMouse ? 1.06 : 1.0
-                                    Behavior on scale {
-                                        NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic }
-                                    }
                                 }
-                                // Name, with an unread dot beside it. A Row so
-                                // the pair stays centred under the avatar as
-                                // the dot comes and goes — the name alone
-                                // would sit off-centre once a dot appeared
-                                // next to it.
-                                Row {
+                                // Name, with an unread dot to the left of it.
+                                //
+                                // The name is centred under the avatar and
+                                // the dot hangs off its left edge, rather
+                                // than the two sharing a centred Row: in a
+                                // Row the dot's width and spacing push the
+                                // name 5px right of centre whenever there is
+                                // one, so a thread going unread visibly
+                                // shifted its own label. The dot keeps its
+                                // place beside the name either way, which is
+                                // the part a Row was there for.
+                                Item {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    spacing: 4
+                                    width: parent.width
+                                    height: pinName.height
                                     readonly property bool unread:
                                         pinTile.modelData.unread > 0
 
-                                    Rectangle {
-                                        width: 6; height: 6; radius: 3
-                                        color: Theme.accent
-                                        visible: parent.unread
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-
                                     Text {
-                                        // Leaves room for the dot when there
-                                        // is one, so a long name elides
-                                        // instead of pushing it out of view.
-                                        width: Math.round(pinnedGrid.tile) - 4
-                                               - (parent.unread ? 10 : 0)
+                                        id: pinName
+                                        // Sized to the name, not to the tile.
+                                        // A tile-wide box centred the text
+                                        // inside *itself*, which left the dot
+                                        // anchored way out at the tile's edge
+                                        // instead of beside the name. `room`
+                                        // caps it — with space for the dot on
+                                        // both sides so centring survives it
+                                        // — so a long name elides rather than
+                                        // pushing the dot out of view.
+                                        readonly property int room:
+                                            Math.round(pinnedGrid.tile) - 4
+                                            - (parent.unread ? 20 : 0)
+                                        width: Math.min(implicitWidth, room)
+                                        anchors.horizontalCenter: parent.horizontalCenter
                                         horizontalAlignment: Text.AlignHCenter
                                         elide: Text.ElideRight
                                         text: pinTile.modelData.name
                                         color: pinTile.selected
                                                ? Qt.rgba(1, 1, 1, 0.9) : Theme.textDim
                                         font.pixelSize: pinnedGrid.avatarSize > 60 ? 12 : 11
-                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    Rectangle {
+                                        width: 6; height: 6; radius: 3
+                                        color: Theme.accent
+                                        visible: parent.unread
+                                        anchors.right: pinName.left
+                                        anchors.rightMargin: 4
+                                        anchors.verticalCenter: pinName.verticalCenter
                                     }
                                 }
                             }
@@ -501,6 +555,17 @@ Item {
                     visible: pinnedFlow.visible
                 }
 
+                // Empty search state
+                Text {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 24
+                    horizontalAlignment: Text.AlignHCenter
+                    visible: threadStore.searchActive && threadList.count === 0
+                    text: "No results"
+                    color: Theme.textDim
+                    font.pixelSize: 13
+                }
+
                 SmoothListView {
                     id: threadList
                     Layout.fillWidth: true
@@ -508,7 +573,11 @@ Item {
                     Layout.topMargin: 6
                     clip: true
                     spacing: 2
-                    model: threadStore.threadModel
+                    // Search replaces the conversation list with per-message
+                    // hits (one thread may appear many times).
+                    model: threadStore.searchActive
+                           ? threadStore.searchModel
+                           : threadStore.threadModel
                     // The store restores the newest thread on launch.
                     currentIndex: 0
                     // No visible scrollbar in the conversation list.
@@ -516,14 +585,20 @@ Item {
 
                     // A model reset (new page, thread added/removed) still
                     // drops contentY to 0. Put it back so the list doesn't
-                    // jump to the top under the user.
+                    // jump to the top under the user — except when entering
+                    // or leaving search, where starting at the top is right.
                     property real savedY: 0
+                    property bool searching: threadStore.searchActive
+                    onSearchingChanged: contentY = 0
                     Connections {
                         target: threadStore.threadModel
                         function onModelAboutToBeReset() {
-                            threadList.savedY = threadList.contentY
+                            if (!threadStore.searchActive)
+                                threadList.savedY = threadList.contentY
                         }
                         function onModelReset() {
+                            if (threadStore.searchActive)
+                                return
                             Qt.callLater(function () {
                                 threadList.contentY = Math.max(
                                     0, Math.min(threadList.savedY,
@@ -540,6 +615,8 @@ Item {
                     // each one reset the model repeatedly mid-scroll.
                     property int _lastPageRequest: 0
                     onContentYChanged: {
+                        if (threadStore.searchActive)
+                            return
                         if (contentHeight > 0
                                 && contentY + height > contentHeight - 400
                                 && count !== _lastPageRequest) {
@@ -559,19 +636,24 @@ Item {
                         required property string avatar
                         required property string initials
                         required property bool pinned
+                        required property int eventId
+                        required property string guid
+                        required property string richPreview
 
                         // Selection follows the store, not `currentIndex`:
                         // opening a chat from the pinned grid never touches
                         // the list's index, so an index-based highlight left
                         // the previously opened row lit alongside the pin.
                         readonly property bool selected:
-                            threadStore.currentKey === threadKey
+                            !threadStore.searchActive
+                            && threadStore.currentKey === threadKey
 
                         // A pinned conversation moves into the grid above
-                        // rather than appearing in both places.
+                        // rather than appearing in both places — but search
+                        // results always show, even if that thread is pinned.
                         width: threadList.width
-                        visible: !pinned
-                        height: pinned ? 0 : 58
+                        visible: threadStore.searchActive || !pinned
+                        height: visible ? 58 : 0
 
                         Rectangle {
                             anchors {
@@ -599,7 +681,7 @@ Item {
                                     Layout.preferredHeight: 8
                                     radius: 4
                                     color: Theme.accent
-                                    opacity: unread > 0 ? 1 : 0
+                                    opacity: (!threadStore.searchActive && unread > 0) ? 1 : 0
                                     Behavior on opacity { NumberAnimation { duration: Theme.animBase } }
                                 }
 
@@ -631,13 +713,19 @@ Item {
                                             font.pixelSize: 11
                                         }
                                     }
-                                    // Single line: wrapping here reserved a
-                                    // second line's height even for short
-                                    // previews, which read as a stray gap.
+                                    // Search rows use RichText so FTS hits are
+                                    // bold; conversation rows stay plain.
                                     Text {
                                         Layout.fillWidth: true
-                                        text: threadDelegate.preview
+                                        text: threadStore.searchActive
+                                              && threadDelegate.richPreview.length > 0
+                                              ? threadDelegate.richPreview
+                                              : threadDelegate.preview
+                                        textFormat: threadStore.searchActive
+                                                    ? Text.RichText
+                                                    : Text.PlainText
                                         elide: Text.ElideRight
+                                        maximumLineCount: 1
                                         color: threadDelegate.selected
                                                ? Qt.rgba(1, 1, 1, 0.8) : Theme.textDim
                                         font.pixelSize: 12
@@ -651,6 +739,15 @@ Item {
                                 hoverEnabled: true
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 onClicked: (m) => {
+                                    if (threadStore.searchActive) {
+                                        if (m.button === Qt.LeftButton) {
+                                            threadStore.openSearchResult(
+                                                threadDelegate.threadKey,
+                                                threadDelegate.eventId,
+                                                threadDelegate.guid)
+                                        }
+                                        return
+                                    }
                                     if (m.button === Qt.RightButton) {
                                         rowMenu.popup()
                                     } else {
@@ -716,6 +813,39 @@ Item {
                 // this size) plus the margin outside it and a clear gap
                 // between the stamp and the bubble it belongs to.
                 readonly property int timeGutter: 74
+
+                // The bubble menu that is currently open, if any. One at a
+                // time, and the page has to be able to reach it: the menus
+                // are non-modal, so closing one when you press elsewhere is
+                // this page's job rather than the overlay's.
+                property var openMenu: null
+
+                // Close the open bubble menu unless the press landed inside
+                // it. Called for every press on the page, before the item
+                // under the cursor gets a look — so a right-click on another
+                // bubble dismisses this menu and opens that one, in the same
+                // gesture rather than needing two.
+                function dismissMenu(scenePos) {
+                    if (!openMenu || !openMenu.visible)
+                        return
+                    var bg = openMenu.background
+                    if (bg) {
+                        var p = bg.mapFromItem(null, scenePos)
+                        if (p.x >= 0 && p.y >= 0
+                                && p.x <= bg.width && p.y <= bg.height)
+                            return
+                    }
+                    openMenu.close()
+                }
+
+                // Send an arbitrary emoji as a tapback and put the menu away.
+                // Shared because the picker fires it from a tap and from
+                // Enter, and duplicating the pair is how one of them ends up
+                // leaving the menu open.
+                function sendReaction(guid, emojiChar, menu) {
+                    threadStore.react(guid, emojiChar)
+                    menu.close()
+                }
 
                 // Empty state
                 Text {
@@ -833,6 +963,133 @@ Item {
                 // already known by the time they matter.
                 cacheBuffer: 1200
 
+                // Scroll-up paging: when the user nears the top, pull older
+                // history from SQLite. Guarded on count so we only ask once
+                // per loaded page. (Handler merged with atBottom below —
+                // QML forbids setting onContentYChanged twice on one item.)
+                property int _olderRequestAt: -1
+
+                // Search / reply-quote jump → park on a specific bubble.
+                //
+                // Two fights make the rubber-band:
+                // 1. Open-thread end-aim (landAtEnd, pinBottom, contentHeight
+                //    follow) snaps to maxContentY — blocked by holdScroll.
+                // 2. ListView clamps contentY when height *estimates* shrink
+                //    (maxContentY drops under contentY) — looks like a yank
+                //    to the bottom. Fix: keep re-centering on jumpTargetEventId
+                //    for the whole hold window, not only while jumpSettle runs.
+                property int pendingJumpEventId: 0
+                // Sticky target kept after jumpSettle ends so late estimate
+                // thrash can still re-aim (pendingJumpEventId is cleared).
+                property int jumpTargetEventId: 0
+                property int jumpTicks: 0
+                property bool landingFromSearch: false
+                // Master lock for jump-to-message. Broader than
+                // landingFromSearch so reply-quote jumps share it.
+                property bool holdScroll: false
+
+                function beginHoldScroll() {
+                    holdScroll = true
+                    landingFromSearch = true
+                    pinBottom = false
+                    settleToEnd.running = false
+                    animateScroll = false
+                    followRelease.stop()
+                    pinRelease.stop()
+                    justOpened = false
+                    // Don't page in older history mid-jump (that rebuilds and
+                    // re-triggers the end-aim race).
+                    _olderRequestAt = count
+                }
+
+                function scrollToEvent(eventId) {
+                    beginHoldScroll()
+                    pendingJumpEventId = eventId
+                    jumpTargetEventId = eventId
+                    jumpTicks = 0
+                    searchJumpRelease.stop()
+                    if (eventId <= 0) {
+                        finishSearchJump()
+                        return
+                    }
+                    // Re-aim while heights settle. ListView only estimates
+                    // until delegates exist; a single positionViewAtIndex is
+                    // usually short or past the hit on a long thread.
+                    jumpSettle.restart()
+                    aimAtPendingJump()
+                }
+
+                function aimAtPendingJump() {
+                    var eid = pendingJumpEventId > 0
+                               ? pendingJumpEventId
+                               : jumpTargetEventId
+                    if (eid <= 0)
+                        return false
+                    var idx = threadStore.indexOfEvent(eid)
+                    if (idx < 0)
+                        return false
+                    // Center on the hit. Do not touch pinBottom / settle.
+                    positionViewAtIndex(idx, ListView.Center)
+                    // Keep SmoothListView's wheel integrator from chasing a
+                    // stale end target after we moved contentY.
+                    stopScroll()
+                    landed = true
+                    return true
+                }
+
+                function finishSearchJump() {
+                    jumpSettle.stop()
+                    pendingJumpEventId = 0
+                    jumpTicks = 0
+                    landed = true
+                    // Keep holdScroll + jumpTargetEventId well past layout
+                    // thrash so clamp-to-maxContentY cannot win late.
+                    searchJumpRelease.restart()
+                }
+
+                function releaseHoldScroll() {
+                    landingFromSearch = false
+                    holdScroll = false
+                    pendingJumpEventId = 0
+                    jumpTargetEventId = 0
+                    jumpTicks = 0
+                    jumpSettle.stop()
+                }
+
+                Timer {
+                    id: searchJumpRelease
+                    // Long enough for a heavy thread's delegate heights to
+                    // stop thrashing; end-aim stays no-op until then.
+                    interval: 3000
+                    onTriggered: msgList.releaseHoldScroll()
+                }
+
+                Timer {
+                    id: jumpSettle
+                    interval: 16
+                    repeat: true
+                    onTriggered: {
+                        msgList.jumpTicks += 1
+                        var ok = msgList.aimAtPendingJump()
+                        // ~1.2s of aggressive re-centering, then holdScroll
+                        // alone re-aims on contentHeight changes.
+                        if (msgList.jumpTicks >= 75
+                                || (msgList.jumpTicks >= 10 && !ok
+                                    && threadStore.indexOfEvent(
+                                        msgList.jumpTargetEventId
+                                        || msgList.pendingJumpEventId) < 0)) {
+                            msgList.finishSearchJump()
+                        }
+                    }
+                }
+
+                Connections {
+                    target: threadStore
+                    function onJumpToMessage(eventId) {
+                        msgList.scrollToEvent(eventId)
+                    }
+                }
+
                 // `maxContentY` and the mouse-wheel handling both come from
                 // SmoothListView. This used to redeclare both here, which is
                 // what made the view jump to the top of the conversation:
@@ -869,7 +1126,11 @@ Item {
                 // pulsing dots, sitting where their next message will land.
                 // A footer rather than a model row so it can't be confused
                 // for a message or scrolled past independently.
+                //
+                // Groups also get the typists' avatars stacked to the left
+                // of the dots (iMessage-style overlap); 1:1 stays dots-only.
                 footer: Item {
+                    id: typingFooter
                     width: msgList.width
                     height: threadStore.peerTyping ? 34 : 0
                     visible: height > 0
@@ -877,37 +1138,102 @@ Item {
                         NumberAnimation { duration: Theme.animBase; easing.type: Easing.OutCubic }
                     }
 
-                    Rectangle {
-                        id: typingBubble
+                    // ~60% step so each next avatar sits on the previous.
+                    readonly property int avatarSize: 22
+                    readonly property int avatarStep: Math.round(avatarSize * 0.6)
+                    readonly property var typingPeople: threadStore.typingAvatars
+                    readonly property int avatarCount: typingPeople ? typingPeople.length : 0
+                    readonly property int avatarsWidth: avatarCount > 0
+                        ? avatarSize + (avatarCount - 1) * avatarStep
+                        : 0
+
+                    Row {
+                        id: typingRow
                         anchors.left: parent.left
                         anchors.leftMargin: 14
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 52
-                        height: 26
-                        radius: 13
-                        color: Theme.bubbleIn
-                        opacity: threadStore.peerTyping ? 1 : 0
-                        Behavior on opacity { NumberAnimation { duration: Theme.animBase } }
+                        spacing: 6
 
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 4
+                        // Overlapping circular avatars for group typists.
+                        Item {
+                            id: typingAvatarsBox
+                            visible: typingFooter.avatarCount > 0
+                            width: typingFooter.avatarsWidth
+                            height: typingFooter.avatarSize
+                            anchors.verticalCenter: parent.verticalCenter
+                            opacity: typingFooter.avatarCount > 0 ? 1 : 0
+                            Behavior on opacity {
+                                NumberAnimation { duration: Theme.animBase }
+                            }
+                            Behavior on width {
+                                NumberAnimation {
+                                    duration: Theme.animBase
+                                    easing.type: Easing.OutCubic
+                                }
+                            }
+
                             Repeater {
-                                model: 3
-                                Rectangle {
+                                model: typingFooter.typingPeople
+                                Item {
+                                    id: typingAvatarSlot
+                                    required property var modelData
                                     required property int index
-                                    width: 7; height: 7; radius: 3.5
-                                    color: Theme.textDim
+                                    width: typingFooter.avatarSize
+                                    height: typingFooter.avatarSize
+                                    x: index * typingFooter.avatarStep
+                                    z: index
 
-                                    // Staggered so the dots ripple rather
-                                    // than blink in unison.
-                                    SequentialAnimation on opacity {
-                                        running: threadStore.peerTyping
-                                        loops: Animation.Infinite
-                                        PauseAnimation { duration: index * 160 }
-                                        NumberAnimation { to: 1.0; duration: 300 }
-                                        NumberAnimation { to: 0.35; duration: 300 }
-                                        PauseAnimation { duration: (2 - index) * 160 }
+                                    // Thin ring so stacked faces separate
+                                    // cleanly against the chat background.
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: parent.width + 2
+                                        height: parent.height + 2
+                                        radius: width / 2
+                                        color: Theme.pageBgSolid
+                                    }
+                                    Avatar {
+                                        anchors.centerIn: parent
+                                        size: typingFooter.avatarSize
+                                        source: typingAvatarSlot.modelData.avatar || ""
+                                        initials: typingAvatarSlot.modelData.initials || "?"
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            id: typingBubble
+                            width: 52
+                            height: 26
+                            radius: 13
+                            color: Theme.bubbleIn
+                            anchors.verticalCenter: parent.verticalCenter
+                            opacity: threadStore.peerTyping ? 1 : 0
+                            Behavior on opacity {
+                                NumberAnimation { duration: Theme.animBase }
+                            }
+
+                            Row {
+                                anchors.centerIn: parent
+                                spacing: 4
+                                Repeater {
+                                    model: 3
+                                    Rectangle {
+                                        required property int index
+                                        width: 7; height: 7; radius: 3.5
+                                        color: Theme.textDim
+
+                                        // Staggered so the dots ripple rather
+                                        // than blink in unison.
+                                        SequentialAnimation on opacity {
+                                            running: threadStore.peerTyping
+                                            loops: Animation.Infinite
+                                            PauseAnimation { duration: index * 160 }
+                                            NumberAnimation { to: 1.0; duration: 300 }
+                                            NumberAnimation { to: 0.35; duration: 300 }
+                                            PauseAnimation { duration: (2 - index) * 160 }
+                                        }
                                     }
                                 }
                             }
@@ -1021,18 +1347,47 @@ Item {
                         var saved = msgList.savedBottom
                         msgList.savedBottom = -1
                         msgList.renderedKey = threadStore.currentKey
+                        // Search jump owns the viewport; do not restore the
+                        // previous bottom offset over the hit.
+                        if (msgList.jumpLock) {
+                            if (msgList.jumpTargetEventId > 0
+                                    || msgList.pendingJumpEventId > 0)
+                                Qt.callLater(function () {
+                                    msgList.aimAtPendingJump()
+                                })
+                            return
+                        }
                         if (saved < 0)
                             return
+                        // A reset zeroes contentY. If the Behavior on
+                        // contentY is still armed from a recent followToEnd
+                        // (new message, then its attachments arrive a beat
+                        // later and rebuild the list), restoring the saved
+                        // offset would *animate* from 0 → bottom — the
+                        // conversation flying up through history and
+                        // gliding back down. Kill the easing first so the
+                        // restore is a single frame.
+                        msgList.animateScroll = false
+                        followRelease.stop()
                         // Restoring to the bottom is `landAtEnd`'s job, not
                         // arithmetic against a figure that is about to change:
                         // `maxContentY` at reset time and after it are two
                         // different numbers, and subtracting across them is
                         // how a send could land at the very top.
                         if (saved < 8) {
+                            // Instant pin, then settle as heights firm up.
+                            // pinBottom absorbs the image-size thrash that
+                            // often follows an attachment rebuild.
+                            msgList.pinBottom = true
+                            pinRelease.restart()
+                            msgList.jumpToEnd()
                             msgList.landAtEnd()
                             return
                         }
                         Qt.callLater(function () {
+                            if (msgList.jumpLock)
+                                return
+                            msgList.animateScroll = false
                             msgList.contentY = Math.max(
                                 msgList.minContentY,
                                 Math.min(msgList.maxContentY,
@@ -1074,6 +1429,21 @@ Item {
                     property real ranTime: 0
                     property real lastY: NaN
                     onTriggered: {
+                        // User grabbed the list mid-settle — stop aiming and
+                        // leave contentY alone so the first scroll is free.
+                        if (msgList.userTookControl
+                                || msgList.holdScroll
+                                || msgList.landingFromSearch
+                                || msgList.pendingJumpEventId > 0
+                                || msgList.jumpTargetEventId > 0
+                                || threadStore.suppressLandAtEnd) {
+                            running = false
+                            if (msgList.holdScroll || msgList.jumpTargetEventId > 0)
+                                msgList.aimAtPendingJump()
+                            msgList.landed = true
+                            revealGuard.stop()
+                            return
+                        }
                         msgList.aimAtEnd()
                         var y = msgList.contentY
                         if (Math.abs(msgList.maxContentY - y) < 1 && y === lastY)
@@ -1123,7 +1493,16 @@ Item {
                 // settle timer below ever finish: its "arrived" test compares
                 // against maxContentY, which positionViewAtEnd never reaches,
                 // so every open previously ran the full tick budget.
+                readonly property bool jumpLock:
+                    holdScroll || landingFromSearch
+                    || pendingJumpEventId > 0 || jumpTargetEventId > 0
+                    || threadStore.suppressLandAtEnd
+
                 function jumpToEnd() {
+                    // Search/reply jump owns the viewport — any end-aim during
+                    // that window is the rubber-band back to the newest msg.
+                    if (jumpLock)
+                        return
                     positionViewAtEnd()
                     contentY = maxContentY
                 }
@@ -1135,6 +1514,8 @@ Item {
                 // the few pixels left over, which is what the glide felt like
                 // it was fighting.
                 function glideToEnd() {
+                    if (jumpLock)
+                        return
                     contentY = maxContentY
                 }
 
@@ -1145,6 +1526,8 @@ Item {
                 // it back to where it had got to — a jump followed by a
                 // visible reversal.
                 function aimAtEnd() {
+                    if (jumpLock)
+                        return
                     if (animateScroll)
                         glideToEnd()
                     else
@@ -1169,6 +1552,21 @@ Item {
                     id: revealGuard
                     interval: 700
                     onTriggered: {
+                        // Search / jump-to-message owns the scroll position.
+                        // Never jumpToEnd here — that was the late yank that
+                        // undid a successful center on the hit ~half a second
+                        // after open.
+                        if (msgList.jumpLock) {
+                            msgList.aimAtPendingJump()
+                            msgList.landed = true
+                            return
+                        }
+                        // User already scrolled during the settle window —
+                        // reveal in place, do not yank back to the bottom.
+                        if (msgList.userTookControl) {
+                            msgList.landed = true
+                            return
+                        }
                         // Aim once more before showing it. Revealing blindly
                         // on a timer put the view on screen still thousands of
                         // pixels from the bottom on a long thread — the exact
@@ -1198,6 +1596,8 @@ Item {
                 }
 
                 function landAtEnd() {
+                    if (jumpLock)
+                        return
                     settleToEnd.stableTime = 0
                     settleToEnd.ranTime = 0
                     settleToEnd.lastY = NaN
@@ -1238,6 +1638,8 @@ Item {
                 }
 
                 function followToEnd() {
+                    if (jumpLock)
+                        return
                     animateScroll = true
                     followRelease.restart()
                     landAtEnd()
@@ -1253,7 +1655,17 @@ Item {
                 onCountChanged: Qt.callLater(function () {
                     if (justOpened) {
                         justOpened = false
+                        // Opening from search: jump handler positions the
+                        // hit. landAtEnd here was overwriting that scroll.
+                        if (jumpLock) {
+                            aimAtPendingJump()
+                            return
+                        }
                         landAtEnd()
+                        return
+                    }
+                    if (jumpLock) {
+                        aimAtPendingJump()
                         return
                     }
                     // Scrolled back through history? Leave the view alone.
@@ -1271,6 +1683,14 @@ Item {
                 // Keep re-pinning while content grows, until the user
                 // scrolls for themselves.
                 property bool pinBottom: false
+                // Latched the moment the user takes the scroll. Distinct from
+                // pinBottom because a contentHeight change can schedule
+                // `Qt.callLater(aimAtEnd)` *before* the wheel/touchpad event
+                // clears the pin — and that deferred aim was what made the
+                // first scroll-up on open feel resisted (one yank back to
+                // the bottom, then free). Once set, no open-path re-aim is
+                // allowed until the next thread switch.
+                property bool userTookControl: false
                 // Only re-pin while the view is still down at the bottom.
                 // Scrolling away is itself the signal to stop, which covers
                 // input paths that raise no drag, flick or wheel signal.
@@ -1295,10 +1715,29 @@ Item {
                     var wasAtBottom = (lastMaxContentY - contentY) < 4
                     var delta = maxContentY - lastMaxContentY
                     lastMaxContentY = maxContentY
-                    if (pinBottom) {
-                        Qt.callLater(aimAtEnd)
+                    // Jump-to-message: never re-pin to the end while heights
+                    // thrash. Re-center on every height change for the whole
+                    // hold window — Flickable clamps contentY when maxContentY
+                    // shrinks, which is the rubber-band-to-bottom without any
+                    // end-aim call.
+                    if (jumpLock) {
+                        if (jumpTargetEventId > 0 || pendingJumpEventId > 0)
+                            Qt.callLater(aimAtPendingJump)
                         return
                     }
+                    if (pinBottom && !userTookControl) {
+                        // Re-check both flags inside the deferred call: the
+                        // user can take control between schedule and fire.
+                        Qt.callLater(function () {
+                            if (msgList.jumpLock)
+                                return
+                            if (msgList.pinBottom && !msgList.userTookControl)
+                                msgList.aimAtEnd()
+                        })
+                        return
+                    }
+                    if (userTookControl)
+                        return
                     if (!landed || !wasAtBottom || delta === 0)
                         return
                     // Content getting *shorter* is never a message; it is the
@@ -1352,47 +1791,82 @@ Item {
                 // Only when you were already at the bottom: someone reading
                 // history should keep their place while they type.
                 property bool atBottom: true
-                onContentYChanged: atBottom = (maxContentY - contentY) < 4
+                onContentYChanged: {
+                    atBottom = (maxContentY - contentY) < 4
+                    // Near the top → page in older history from SQLite.
+                    // Skip during jump hold — prepending rebuilds the model
+                    // and restarts the end-aim fight.
+                    if (jumpLock)
+                        return
+                    if (contentY < originY + 200
+                            && count > 0
+                            && count !== _olderRequestAt) {
+                        _olderRequestAt = count
+                        threadStore.loadOlderMessages()
+                    }
+                }
                 onHeightChanged: {
+                    if (jumpLock)
+                        return
                     if (landed && atBottom)
                         followToEnd()
                 }
                 // Any user scroll input releases the bottom pin — otherwise
                 // a slowly-loading image growing contentHeight yanks the
-                // view back down under them.
+                // view back down under them. Also latches userTookControl so
+                // a deferred aimAtEnd scheduled before this event cannot
+                // still win the first scroll-up after open.
                 onUserScrolled: {
+                    userTookControl = true
                     pinBottom = false
                     settleToEnd.running = false
                     // Or the wheel would be easing too, which feels like drag.
                     animateScroll = false
                     followRelease.stop()
+                    pinRelease.stop()
+                    // Hand control back if the user scrolls during a search jump.
+                    if (jumpLock) {
+                        searchJumpRelease.stop()
+                        releaseHoldScroll()
+                        landed = true
+                    }
                 }
 
-                // Stop re-pinning a couple of seconds after opening, so a
-                // slow image can't yank the view long afterwards.
+                // Stop re-pinning shortly after opening, so a slow image
+                // can't yank the view long afterwards. Short on purpose:
+                // onUserScrolled is the real release; this is only a
+                // backstop for threads the user never touches.
                 Timer {
                     id: pinRelease
-                    interval: 2500
+                    interval: 900
                     onTriggered: msgList.pinBottom = false
                 }
                 Connections {
                     target: threadStore
                     function onPeerChanged() {
                         msgList.justOpened = true
-                        msgList.pinBottom = true
-                        // Whatever the last thread was doing is over. A glide
-                        // left running by a message that arrived just before
-                        // the switch made the new thread *animate* its way to
-                        // the bottom — measured at 10465px in one eased move,
-                        // on screen, which is the jolt in its worst form.
                         msgList.animateScroll = false
+                        msgList.userTookControl = false
                         followRelease.stop()
                         // Hidden until it has settled at the bottom; see
                         // `landed`. Only on a thread switch — a message
                         // arriving must never blank the conversation.
                         msgList.landed = false
-                        revealGuard.restart()
+                        // Search jump owns the scroll position — stop every
+                        // land-at-end path so they cannot yank the view after
+                        // positionViewAtIndex.
+                        if (threadStore.suppressLandAtEnd) {
+                            msgList.beginHoldScroll()
+                            // Still a backstop so a failed jump does not leave
+                            // the pane invisible forever (sets landed only).
+                            revealGuard.restart()
+                            return
+                        }
+                        msgList.releaseHoldScroll()
+                        searchJumpRelease.stop()
+                        msgList.pinBottom = true
                         pinRelease.restart()
+                        revealGuard.restart()
                         msgList.landAtEnd()
                     }
                 }
@@ -1401,8 +1875,7 @@ Item {
                     id: msgDelegate
                     required property string body
                     required property bool outgoing
-                    required property string reaction
-                    required property string reactionEmoji
+                    required property var reactions
                     required property bool mediaOnly
                     required property string image
                     required property string fileLabel
@@ -1437,6 +1910,12 @@ Item {
                     required property var edits
                     // Non-empty when this message replies to another.
                     required property string replyBody
+                    // Guid of the parent message (paired with replyBody) so
+                    // the quote can jump to the original on tap.
+                    required property string replyGuid
+                    // Store row id + search-hit highlight.
+                    required property int eventId
+                    required property bool highlight
                     // Collapsed by default: the current text is the one that
                     // counts, and history would otherwise pad every edited
                     // message forever.
@@ -1488,6 +1967,12 @@ Item {
                     readonly property bool isImage: kind === "image"
                     readonly property bool isSticker: kind === "sticker"
                     readonly property bool isMedia: isImage || isSticker
+                    // True while the free-standing Image is actually drawable.
+                    // Empty source or a failed decode must not leave a blank
+                    // hole — the file-chip bubble falls back instead.
+                    readonly property bool showMedia:
+                        isMedia && image !== ""
+                        && mediaItem.status !== Image.Error
                     // An emoji-only message is drawn big and bare. It still
                     // uses the bubble item for layout — only the painted
                     // background and the tail drop away.
@@ -1505,7 +1990,7 @@ Item {
                     // Built for a right-hand bubble and mirrored through
                     // X() for incoming ones — mirroring reverses the winding,
                     // hence the flipped arc sweep flag.
-                    function bubblePath(w0, h0, r0, hasTail, right) {
+                    function bubblePath(w0, h0, r0, hasTail, right, strokeW) {
                         // Inset by half the rim stroke. The stroke is centred
                         // on the outline, so an outline spanning y ∈ [0, h]
                         // puts fill on rows 0..h-1 and leaves the stroke's
@@ -1515,7 +2000,14 @@ Item {
                         // stroke fell on row -1, outside the item. Building
                         // the outline half a pixel in makes all four edges
                         // land inside the fill, and symmetric.
-                        const inset = 0.5
+                        //
+                        // `strokeW` must match ShapePath.strokeWidth: the
+                        // search/reply highlight uses 2px, and leaving the
+                        // inset at 0.5 clipped the outer half of that stroke
+                        // against the Shape bounds — the pixel crumbs on the
+                        // rim.
+                        const sw = (strokeW > 0) ? strokeW : 1
+                        const inset = sw * 0.5
                         const w = w0 - inset * 2
                         const h = h0 - inset * 2
                         // A single-line bubble is shorter than twice the
@@ -1616,6 +2108,9 @@ Item {
                     // on the same side of the thread. Without it a reply is
                     // visually identical to an ordinary message, which is
                     // indistinguishable from replying being broken.
+                    //
+                    // Tappable when we know the parent's guid: jumps to that
+                    // bubble the same way a search hit does.
                     Item {
                         width: msgList.width
                         height: msgDelegate.replyBody === ""
@@ -1623,6 +2118,7 @@ Item {
                         visible: height > 0
 
                         Row {
+                            id: quoteRow
                             anchors.right: msgDelegate.outgoing
                                            ? parent.right : undefined
                             anchors.left: msgDelegate.outgoing
@@ -1630,6 +2126,13 @@ Item {
                             anchors.rightMargin: msgDelegate.sideMargin + 6
                             anchors.leftMargin: 16 + msgDelegate.gutter + 6
                             spacing: 5
+                            // Hoverable only when the parent guid is known.
+                            // Soft white lift — not a blue underlined link;
+                            // the accent rim on the jumped-to bubble is the
+                            // real confirmation.
+                            readonly property bool quoteLit:
+                                quoteHover.hovered
+                                && msgDelegate.replyGuid !== ""
 
                             // A short rule standing in for iOS's curved
                             // connector, marking the quote as attached to the
@@ -1639,64 +2142,283 @@ Item {
                                 height: quoted.implicitHeight
                                 radius: 1
                                 color: Theme.textDim
-                                opacity: 0.45
+                                // Brightens with the quote on hover so the
+                                // whole reply affordance reads as one control.
+                                opacity: quoteRow.quoteLit ? 0.7 : 0.45
+                                Behavior on opacity {
+                                    NumberAnimation {
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
                             }
 
                             Text {
                                 id: quoted
+                                // Width is the text itself (capped), not the
+                                // full thread — handlers live on this item so
+                                // only the preview is hoverable/clickable,
+                                // not the empty rest of the row.
                                 width: Math.min(implicitWidth,
                                                 msgList.width * 0.5)
                                 text: msgDelegate.replyBody
-                                elide: Text.ElideRight
+                                // Rich when the parent had an inline sticker
+                                // (U+F00A → <img> in the snippet); plain
+                                // otherwise so a body with "<" isn't parsed
+                                // as markup.
+                                textFormat: msgDelegate.replyBody.indexOf(
+                                                "<img") >= 0
+                                            ? Text.RichText : Text.PlainText
+                                // Elide only works on plain text; rich quotes
+                                // with a sticker are short enough in practice.
+                                elide: textFormat === Text.PlainText
+                                       ? Text.ElideRight : Text.ElideNone
                                 maximumLineCount: 2
                                 wrapMode: Text.Wrap
-                                color: Theme.textDim
+                                // Resting dim caption. On hover, lift toward
+                                // full text colour — a soft white wash, not
+                                // a blue link.
+                                color: quoteRow.quoteLit
+                                       ? Theme.text : Theme.textDim
+                                opacity: quoteRow.quoteLit ? 1.0 : 0.85
+                                // Must match models._REPLY_PX so inline
+                                // stickers in the quote are text-tall here.
                                 font.pixelSize: 11
+                                Behavior on color {
+                                    ColorAnimation {
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
+                                Behavior on opacity {
+                                    NumberAnimation {
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
+
+                                HoverHandler {
+                                    id: quoteHover
+                                    enabled: msgDelegate.replyGuid !== ""
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                                TapHandler {
+                                    enabled: msgDelegate.replyGuid !== ""
+                                    onTapped: threadStore.jumpToGuid(
+                                                  msgDelegate.replyGuid)
+                                }
                             }
                         }
                     }
 
                     // Previous versions of an edited message, revealed by the
-                    // "Edited" link in the caption. They sit directly above
-                    // the current text, oldest first, faded and italic — the
-                    // point is to read them as superseded, not as messages
-                    // in their own right.
+                    // "Edited" link in the caption. Drawn as real (tailless)
+                    // bubbles, faded, oldest first above the current text —
+                    // history that still reads as the same conversation,
+                    // not as plain italic notes.
+                    //
+                    // Height is animated on the column so expanding/collapsing
+                    // pushes the thread above smoothly (ListView contentHeight
+                    // tracks it; bottom-follow keeps the current message in
+                    // view). Individual bubbles fan in/out with a stagger
+                    // from the current message upward.
                     Column {
+                        id: editHistory
                         width: parent.width
-                        spacing: 2
-                        visible: msgDelegate.showEdits
-                                 && msgDelegate.edits.length > 0
+                        spacing: 3
+                        // Clip so the height collapse hides children while
+                        // they are still in the tree for the close animation.
+                        clip: true
+                        readonly property bool wantOpen:
+                            msgDelegate.showEdits
+                            && msgDelegate.edits.length > 0
+                        // Keep the model mounted whenever there is history so
+                        // closing can animate; only the height collapses to 0.
+                        visible: msgDelegate.edits.length > 0
+                        height: wantOpen ? implicitHeight : 0
+                        Behavior on height {
+                            NumberAnimation {
+                                duration: Theme.animArrive
+                                easing.type: Easing.OutCubic
+                            }
+                        }
 
                         Repeater {
-                            model: msgDelegate.showEdits
-                                   ? msgDelegate.edits : []
+                            id: editRepeater
+                            // Always the full list when non-empty: toggling
+                            // the model with showEdits would destroy items
+                            // on close and kill the fan-down animation.
+                            model: msgDelegate.edits
 
                             Item {
+                                id: histItem
+                                required property int index
                                 required property string modelData
                                 width: msgList.width
-                                height: oldText.implicitHeight + 4
+                                height: histBubble.height + 4
 
-                                Text {
-                                    id: oldText
-                                    // Aligned with the bubble it belongs to,
-                                    // on the same side of the thread.
+                                // Fan offset: starts below (toward the current
+                                // message) and rises into place on open.
+                                property real fanY: 10
+                                property real fanOpacity: 0
+                                opacity: fanOpacity
+                                transform: Translate { y: histItem.fanY }
+
+                                // Stagger from the current message upward:
+                                // the version closest to the live bubble
+                                // (highest index) moves first; oldest last.
+                                readonly property int openDelay:
+                                    Math.max(0, (editRepeater.count - 1 - index)
+                                             * 40)
+                                // Close fans down from the top: oldest first.
+                                readonly property int closeDelay:
+                                    Math.max(0, index * 30)
+
+                                function playOpen() {
+                                    closeAnim.stop()
+                                    openAnim.restart()
+                                }
+                                function playClose() {
+                                    openAnim.stop()
+                                    closeAnim.restart()
+                                }
+
+                                SequentialAnimation {
+                                    id: openAnim
+                                    PauseAnimation {
+                                        duration: histItem.openDelay
+                                    }
+                                    ParallelAnimation {
+                                        NumberAnimation {
+                                            target: histItem
+                                            property: "fanOpacity"
+                                            to: 0.5
+                                            duration: Theme.animArrive
+                                            easing.type: Easing.OutCubic
+                                        }
+                                        NumberAnimation {
+                                            target: histItem
+                                            property: "fanY"
+                                            to: 0
+                                            duration: Theme.animArrive
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
+                                }
+                                SequentialAnimation {
+                                    id: closeAnim
+                                    PauseAnimation {
+                                        duration: histItem.closeDelay
+                                    }
+                                    ParallelAnimation {
+                                        NumberAnimation {
+                                            target: histItem
+                                            property: "fanOpacity"
+                                            to: 0
+                                            duration: Theme.animBase
+                                            easing.type: Easing.OutCubic
+                                        }
+                                        NumberAnimation {
+                                            target: histItem
+                                            property: "fanY"
+                                            to: 10
+                                            duration: Theme.animBase
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
+                                }
+
+                                Connections {
+                                    target: editHistory
+                                    function onWantOpenChanged() {
+                                        if (editHistory.wantOpen)
+                                            histItem.playOpen()
+                                        else
+                                            histItem.playClose()
+                                    }
+                                }
+                                Component.onCompleted: {
+                                    // Mid-open rebuild is rare; still land
+                                    // in the correct resting state.
+                                    if (editHistory.wantOpen) {
+                                        fanOpacity = 0.5
+                                        fanY = 0
+                                    }
+                                }
+
+                                // Tailless bubble matching the live one on
+                                // this side — same path helper, same fill,
+                                // no tail so history doesn't read as a
+                                // second live message.
+                                Item {
+                                    id: histBubble
                                     anchors.right: msgDelegate.outgoing
                                                    ? parent.right : undefined
                                     anchors.left: msgDelegate.outgoing
                                                   ? undefined : parent.left
                                     anchors.rightMargin: msgDelegate.sideMargin
                                     anchors.leftMargin: 16 + msgDelegate.gutter
-                                    width: Math.min(implicitWidth,
-                                                    msgList.width * 0.62)
-                                    text: parent.modelData
-                                    wrapMode: Text.Wrap
-                                    horizontalAlignment:
-                                        msgDelegate.outgoing
-                                        ? Text.AlignRight : Text.AlignLeft
-                                    color: Theme.textDim
-                                    opacity: 0.65
-                                    font.pixelSize: 12
-                                    font.italic: true
+                                    readonly property int padH: 28
+                                    readonly property int padV: 16
+                                    width: Math.min(
+                                        histText.implicitWidth + padH,
+                                        msgList.width * 0.68)
+                                    height: histText.implicitHeight + padV
+
+                                    Shape {
+                                        anchors.fill: parent
+                                        preferredRendererType: Shape.CurveRenderer
+                                        ShapePath {
+                                            fillColor: msgDelegate.outgoing
+                                                       ? "transparent"
+                                                       : Theme.bubbleIn
+                                            fillGradient: msgDelegate.outgoing
+                                                          ? histGrad : null
+                                            strokeColor: Theme.bubbleRim
+                                            strokeWidth: 1
+                                            joinStyle: ShapePath.RoundJoin
+                                            capStyle: ShapePath.RoundCap
+                                            PathSvg {
+                                                path: msgDelegate.bubblePath(
+                                                    histBubble.width,
+                                                    histBubble.height,
+                                                    Theme.radiusBubble,
+                                                    false,
+                                                    msgDelegate.outgoing,
+                                                    1)
+                                            }
+                                        }
+                                        Shapes.LinearGradient {
+                                            id: histGrad
+                                            x1: 0; y1: 0
+                                            x2: 0; y2: histBubble.height
+                                            GradientStop {
+                                                position: 0.0
+                                                color: Theme.bubbleOutTop
+                                            }
+                                            GradientStop {
+                                                position: 1.0
+                                                color: Theme.bubbleOutBot
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        id: histText
+                                        anchors {
+                                            left: parent.left
+                                            right: parent.right
+                                            verticalCenter: parent.verticalCenter
+                                            leftMargin: histBubble.padH / 2
+                                            rightMargin: histBubble.padH / 2
+                                        }
+                                        text: histItem.modelData
+                                        wrapMode: Text.Wrap
+                                        font.pixelSize: Math.round(
+                                            13 * Theme.fontScale)
+                                        color: msgDelegate.outgoing
+                                               ? "white" : Theme.bubbleInText
+                                    }
                                 }
                             }
                         }
@@ -1717,7 +2439,7 @@ Item {
                         // events reach it either way.
                         MouseArea {
                             id: bubbleHit
-                            anchors.fill: msgDelegate.isMedia ? mediaItem : bubble
+                            anchors.fill: msgDelegate.showMedia ? mediaItem : bubble
                             // Generous: the bubble is sized tight to its text
                             // and a few px either way should still count.
                             anchors.margins: -4
@@ -1728,6 +2450,7 @@ Item {
                                      || msgDelegate.body !== ""
                             acceptedButtons: Qt.RightButton
                             onClicked: (mouse) => {
+                                bubbleMenu.picking = false
                                 bubbleMenu.x = mouse.x
                                 bubbleMenu.y = mouse.y - bubbleMenu.height - 4
                                 bubbleMenu.open()
@@ -1741,10 +2464,30 @@ Item {
                         Popup {
                             id: bubbleMenu
                             padding: 6
-                            modal: true
+                            // Deliberately not modal, and no
+                            // CloseOnPressOutside. Both make the overlay
+                            // swallow the press that dismisses the menu,
+                            // which meant right-clicking a *second* bubble
+                            // only closed the first one's menu — every other
+                            // right-click did nothing, and the messages that
+                            // landed on the dead beat looked un-reactable.
+                            // The page's own press handler closes this
+                            // instead (see `dismissMenu`), leaving the press
+                            // free to reach the bubble under it.
+                            modal: false
                             dim: false
                             closePolicy: Popup.CloseOnEscape
-                                         | Popup.CloseOnPressOutside
+
+                            // Showing the full emoji picker rather than the
+                            // six classic tapbacks.
+                            property bool picking: false
+
+                            onOpened: msgArea.openMenu = bubbleMenu
+                            onClosed: {
+                                picking = false
+                                if (msgArea.openMenu === bubbleMenu)
+                                    msgArea.openMenu = null
+                            }
 
                             background: Rectangle {
                                 color: Theme.dark ? Qt.rgba(0.17, 0.17, 0.19, 0.98)
@@ -1758,13 +2501,15 @@ Item {
                                 spacing: 2
 
                                 // The six classic tapbacks, in a row, the way
-                                // iOS presents them.
+                                // iOS presents them, with a "more" button on
+                                // the end for everything else.
                                 Row {
                                     spacing: 2
                                     // Same rule as the verbs below: a tapback
                                     // names its target by guid, so a message
                                     // without one can't carry a reaction.
                                     visible: msgDelegate.guid !== ""
+                                             && !bubbleMenu.picking
                                     Repeater {
                                         model: [
                                             { emoji: "❤️", kind: "Heart" },
@@ -1791,6 +2536,15 @@ Item {
                                             HoverHandler { id: tapHover }
                                             TapHandler {
                                                 onTapped: {
+                                                    // A verb, not the emoji:
+                                                    // these six have real
+                                                    // tapback types on the
+                                                    // wire, and sending them
+                                                    // as arbitrary emoji
+                                                    // would show up on the
+                                                    // phone as the iOS 18
+                                                    // kind instead of the
+                                                    // classic one.
                                                     threadStore.react(
                                                         msgDelegate.guid,
                                                         parent.modelData.kind)
@@ -1798,6 +2552,120 @@ Item {
                                                 }
                                             }
                                         }
+                                    }
+
+                                    // Anything that isn't one of the six.
+                                    Rectangle {
+                                        width: 32; height: 32
+                                        radius: 16
+                                        color: moreHover.hovered
+                                               ? Qt.rgba(1, 1, 1, 0.12)
+                                               : "transparent"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "＋"
+                                            color: Theme.textDim
+                                            font.pixelSize: 15
+                                        }
+                                        HoverHandler { id: moreHover }
+                                        TapHandler {
+                                            onTapped: bubbleMenu.picking = true
+                                        }
+                                    }
+                                }
+
+                                // The full picker, in place of the six.
+                                // iMessage carries any emoji as a tapback
+                                // (iOS 18+) and we could already *receive*
+                                // those; this is the half that sends them.
+                                Column {
+                                    id: emojiPicker
+                                    spacing: 4
+                                    visible: msgDelegate.guid !== ""
+                                             && bubbleMenu.picking
+
+                                    // Whatever `query` matches, or the
+                                    // hand-picked openers before it is typed
+                                    // in. Recomputed on demand rather than
+                                    // bound, so the list survives the field
+                                    // being cleared.
+                                    property var choices: []
+
+                                    function refresh() {
+                                        choices = query.text.length > 0
+                                                  ? emoji.search(query.text)
+                                                  : emoji.popular(24)
+                                    }
+
+                                    onVisibleChanged: {
+                                        if (!visible)
+                                            return
+                                        query.text = ""
+                                        refresh()
+                                        query.forceActiveFocus()
+                                    }
+
+                                    TextField {
+                                        id: query
+                                        width: 190
+                                        height: 26
+                                        placeholderText: "Search emoji"
+                                        color: Theme.text
+                                        font.pixelSize: 12
+                                        leftPadding: 8
+                                        background: Rectangle {
+                                            radius: 7
+                                            color: Qt.rgba(1, 1, 1, 0.08)
+                                        }
+                                        onTextChanged: emojiPicker.refresh()
+                                        // Enter sends the first match, so a
+                                        // search that already found what you
+                                        // meant needn't be aimed at.
+                                        Keys.onReturnPressed: {
+                                            if (emojiPicker.choices.length > 0)
+                                                msgArea.sendReaction(
+                                                    msgDelegate.guid,
+                                                    emojiPicker.choices[0].emoji,
+                                                    bubbleMenu)
+                                        }
+                                        Keys.onEscapePressed: bubbleMenu.picking = false
+                                    }
+
+                                    Grid {
+                                        columns: 6
+                                        spacing: 0
+                                        Repeater {
+                                            model: emojiPicker.choices
+                                            Rectangle {
+                                                required property var modelData
+                                                width: 32; height: 32
+                                                radius: 16
+                                                color: pickHover.hovered
+                                                       ? Qt.rgba(1, 1, 1, 0.12)
+                                                       : "transparent"
+                                                Text {
+                                                    anchors.centerIn: parent
+                                                    text: parent.modelData.emoji
+                                                    font.pixelSize: 17
+                                                }
+                                                HoverHandler { id: pickHover }
+                                                TapHandler {
+                                                    onTapped: msgArea.sendReaction(
+                                                        msgDelegate.guid,
+                                                        parent.modelData.emoji,
+                                                        bubbleMenu)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        visible: emojiPicker.choices.length === 0
+                                        width: 190
+                                        text: "No emoji matches “" + query.text + "”"
+                                        elide: Text.ElideRight
+                                        color: Theme.textDim
+                                        font.pixelSize: 11
                                     }
                                 }
 
@@ -1904,8 +2772,11 @@ Item {
                         // ---- media: no bubble, stands on its own --------
                         Image {
                             id: mediaItem
-                            visible: isMedia && status !== Image.Error
-                            source: isMedia ? image : ""
+                            // Hide on empty source or decode failure so the
+                            // file-chip bubble below can take over. Loading
+                            // still reserves space via width/height below.
+                            visible: showMedia
+                            source: isMedia && image !== "" ? image : ""
                             anchors {
                                 right: outgoing ? parent.right : undefined
                                 left: outgoing ? undefined : parent.left
@@ -1945,10 +2816,13 @@ Item {
 
                             // Photos get rounded corners; stickers stay bare
                             // and keep their transparency.
-                            layer.enabled: isImage
+                            layer.enabled: isImage && showMedia
                             layer.effect: OpacityMask { maskSource: imgMask }
 
-                            TapHandler { onTapped: Qt.openUrlExternally(image) }
+                            TapHandler {
+                                enabled: image !== ""
+                                onTapped: Qt.openUrlExternally(image)
+                            }
                         }
 
                         Rectangle {
@@ -1965,7 +2839,10 @@ Item {
                         // ---- text / file chip: normal bubble ------------
                         Rectangle {
                             id: bubble
-                            visible: !isMedia
+                            // Successful media draws only the Image above.
+                            // Failed/empty media falls through to the chip
+                            // so the user still sees a name and can open it.
+                            visible: !showMedia
 
                             anchors {
                                 right: outgoing ? parent.right : undefined
@@ -1974,7 +2851,10 @@ Item {
                                 leftMargin: 16 + gutter
                             }
                             y: 2
-                            readonly property bool isFile: fileLabel !== ""
+                            // Image/sticker rows carry fileLabel as a decode
+                            // fallback; treat them as chips when media failed.
+                            readonly property bool isFile:
+                                fileLabel !== "" && (!isMedia || !showMedia)
                             readonly property int padH: isJumbo ? 4 : 28
                             readonly property int padV: isJumbo ? 2 : 16
                             width: isFile
@@ -2002,13 +2882,22 @@ Item {
                                     fillColor: outgoing ? "transparent"
                                                         : Theme.bubbleIn
                                     fillGradient: outgoing ? outGradient : null
-                                    strokeColor: Theme.bubbleRim
-                                    strokeWidth: 1
+                                    // Search / reply-quote jump lights the
+                                    // rim. Stroke width and path inset stay
+                                    // paired (see bubblePath) so a 2px accent
+                                    // does not clip into pixel crumbs.
+                                    strokeColor: msgDelegate.highlight
+                                                 ? Theme.accent
+                                                 : Theme.bubbleRim
+                                    strokeWidth: msgDelegate.highlight ? 2 : 1
+                                    joinStyle: ShapePath.RoundJoin
+                                    capStyle: ShapePath.RoundCap
                                     PathSvg {
                                         path: msgDelegate.bubblePath(
                                             bubble.width, bubble.height,
                                             Theme.radiusBubble,
-                                            tail && !isMedia, outgoing)
+                                            tail && !isMedia, outgoing,
+                                            msgDelegate.highlight ? 2 : 1)
                                     }
                                 }
 
@@ -2108,7 +2997,7 @@ Item {
                             initials: senderInitials || "?"
                             x: 12
                             anchors {
-                                bottom: isMedia ? mediaItem.bottom : bubble.bottom
+                                bottom: showMedia ? mediaItem.bottom : bubble.bottom
                             }
                         }
 
@@ -2116,7 +3005,7 @@ Item {
                         Item {
                             id: content
                             width: 1
-                            height: isMedia ? mediaItem.height : bubble.height
+                            height: showMedia ? mediaItem.height : bubble.height
                         }
 
                         // The Show Times gutter. Deliberately outside the
@@ -2145,56 +3034,73 @@ Item {
                             anchors {
                                 right: parent.right
                                 rightMargin: 18
-                                verticalCenter: msgDelegate.isMedia
+                                verticalCenter: msgDelegate.showMedia
                                                 ? mediaItem.verticalCenter
                                                 : bubble.verticalCenter
                             }
                         }
 
-                        // Tapback badge overlapping the corner nearest the
-                        // centre of the view, as in Messages.app.
-                        Image {
+                        // Tapbacks, overlapping the corner of the bubble
+                        // nearest the centre of the view, as in Messages.app.
+                        //
+                        // Bare emoji, no disc behind them: they used to be
+                        // six hand-drawn SVGs, which meant an iOS 18 emoji
+                        // tapback had to borrow an empty bubble and get
+                        // painted into a hole measured off the artwork. Every
+                        // reaction is an emoji now, so none of them is a
+                        // special case.
+                        Row {
                             id: reactionBadge
-                            source: reaction
-                            visible: reaction !== ""
-                            width: 30; height: 30
-                            // Without sourceSize the SVG rasterizes at its
-                            // intrinsic 117x115 and is then scaled down by
-                            // the GPU, which is what made it look jagged.
-                            sourceSize.width: 30 * Math.ceil(Screen.devicePixelRatio * 2)
-                            sourceSize.height: 30 * Math.ceil(Screen.devicePixelRatio * 2)
-                            smooth: true
-                            mipmap: true
-                            antialiasing: true
+                            visible: msgDelegate.reactions.length > 0
+                            // Negative: a message can hold a tapback from
+                            // everyone in the thread, and a plain row of them
+                            // walks off across the conversation. Overlapped,
+                            // they read as one cluster — and because later
+                            // siblings paint over earlier ones, the newest
+                            // reaction lands on top without touching z.
+                            //
+                            // About a third of each emoji is covered: enough
+                            // to read as a stack without hiding what any of
+                            // them are.
+                            spacing: -Math.round(reactionBadge.glyph * 0.34)
+                            // Roughly the width one emoji occupies at this
+                            // size — the margins below are fractions of it, so
+                            // the cluster keeps sitting on the bubble's corner
+                            // if the size ever changes.
+                            readonly property int glyph: 20
                             anchors {
-                                verticalCenter: isMedia ? mediaItem.top : bubble.top
-                                verticalCenterOffset: 6
-                                left: outgoing ? (isMedia ? mediaItem.left : bubble.left)
+                                // Straddling the bubble's top edge, not
+                                // floating above it: at a whole glyph of
+                                // negative margin a single reaction cleared
+                                // the corner entirely and looked unattached
+                                // to the message it belonged to. Two-thirds
+                                // of it now sits over the bubble.
+                                verticalCenter: showMedia ? mediaItem.top : bubble.top
+                                verticalCenterOffset: Math.round(glyph * 0.15)
+                                left: outgoing ? (showMedia ? mediaItem.left : bubble.left)
                                                : undefined
                                 right: outgoing ? undefined
-                                                : (isMedia ? mediaItem.right : bubble.right)
-                                leftMargin: -10
-                                rightMargin: -10
+                                                : (showMedia ? mediaItem.right : bubble.right)
+                                leftMargin: -Math.round(glyph * 0.35)
+                                rightMargin: -Math.round(glyph * 0.35)
                             }
 
-                            Text {
-                                visible: reactionEmoji !== ""
-                                text: reactionEmoji
-                                font.pixelSize: 13
-                                anchors {
-                                    horizontalCenter: parent.horizontalCenter
-                                    horizontalCenterOffset:
-                                        ((outgoing ? 66 / 117 : 51 / 117) - 0.5) * parent.width
-                                    verticalCenter: parent.verticalCenter
-                                    verticalCenterOffset: (51 / 115 - 0.5) * parent.height
+                            Repeater {
+                                model: msgDelegate.reactions
+                                Text {
+                                    required property string modelData
+                                    text: modelData
+                                    font.pixelSize: 22
                                 }
                             }
                         }
                     }
 
-                    // Delivery state, right-aligned under the newest outgoing
-                    // bubble. Small and grey: it should be findable when
-                    // you're waiting on it and invisible when you're not.
+                    // Delivery state / Edited marker under the bubble.
+                    // Outgoing (blue): right-aligned with the bubble wall.
+                    // Incoming (grey): left-aligned with the grey bubble
+                    // (`16 + gutter`), so a solo "Edited" sits under its
+                    // own side rather than floating on the far right.
                     Item {
                         id: captionLine
                         // "Edited" earns the line on its own, even with no
@@ -2203,6 +3109,9 @@ Item {
                             msgDelegate.edits.length > 0
                         readonly property bool shown:
                             msgDelegate.deliveryState !== "" || hasEdits
+                        // Receipts only exist on outgoing; use the bubble
+                        // side so an edited grey bubble mirrors blue.
+                        readonly property bool alignRight: msgDelegate.outgoing
 
                         width: msgList.width
                         // Animated, so the thread opens the space for a
@@ -2256,13 +3165,14 @@ Item {
                                 }
                             }
 
-                            anchors.right: parent.right
-                            // Flush with the bubble's right wall — same
-                            // margin the bubble itself uses, so the caption
-                            // ends exactly where the bubble does. The tail
-                            // overhangs slightly past this; that's fine, it's
-                            // the wall the eye reads as the edge.
+                            anchors.right: captionLine.alignRight
+                                           ? parent.right : undefined
+                            anchors.left: captionLine.alignRight
+                                          ? undefined : parent.left
+                            // Flush with the bubble wall on the matching
+                            // side — same margins the bubble itself uses.
                             anchors.rightMargin: msgDelegate.sideMargin
+                            anchors.leftMargin: 16 + msgDelegate.gutter
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 3
 

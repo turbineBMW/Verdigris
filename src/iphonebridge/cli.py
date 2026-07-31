@@ -133,7 +133,7 @@ def contacts_sync(verbose: bool = typer.Option(False, "-v", "--verbose")):
 def sms_list(
     n: int = typer.Option(20, "-n", "--limit", help="Max messages to show (most recent first)"),
     source: str = typer.Option("iphone", "--source",
-                               help="iphone (live MAP query) | local (JSONL log)"),
+                               help="iphone (live MAP query) | local (message store)"),
     folder: str = typer.Option("telecom/msg/INBOX", "--folder",
                                help="MAP folder when --source=iphone "
                                     "(e.g. telecom/msg/INBOX or telecom/msg/sent)"),
@@ -144,9 +144,8 @@ def sms_list(
 
     --source iphone (default): live MAP query via the running daemon. Shows
         the iPhone's actual recent inbox (or other folder via --folder).
-    --source local: read ~/.local/state/iphonebridge/events.jsonl. Only
-        shows events the daemon has caught since startup, but works even
-        if the daemon isn't running.
+    --source local: read ~/.local/state/iphonebridge/messages.sqlite
+        (live + backup history). Works even if the daemon isn't running.
     """
     import json
     from datetime import datetime
@@ -222,7 +221,7 @@ def sms_list(
         except dbus.exceptions.DBusException as e:
             typer.echo(typer.style(
                 f"Daemon not reachable on DBus: {e.get_dbus_message()}\n"
-                "Falling back to local JSONL (--source local).",
+                "Falling back to local store (--source local).",
                 fg=typer.colors.YELLOW,
             ))
             source = "local"
@@ -232,7 +231,7 @@ def sms_list(
             except dbus.exceptions.DBusException as e:
                 typer.echo(typer.style(
                     f"Live query failed: {e.get_dbus_message() or e.get_dbus_name()}\n"
-                    "Falling back to local JSONL.",
+                    "Falling back to local store.",
                     fg=typer.colors.YELLOW,
                 ))
                 source = "local"
@@ -272,28 +271,35 @@ def sms_list(
                            read=m.get("read", True))
                 return
 
-    # ---- local JSONL source --------------------------------------------
-    if not config.EVENTS_JSONL.exists():
+    # ---- local SQLite message store ------------------------------------
+    from iphonebridge.message_store import MESSAGE_KINDS, MessageStore
+
+    store = MessageStore()
+    # Pull a wider net when filtering, then take the newest N matches.
+    pull = max(n * 10, 100) if (filter_phone_norms or from_text_lower) else n
+    try:
+        events = store.read_events(kinds=set(MESSAGE_KINDS), limit=pull)
+    except Exception as e:
         typer.echo(typer.style(
-            f"No local event log yet at {config.EVENTS_JSONL}",
+            f"Could not read message store at {config.MESSAGES_DB}: {e}",
+            fg=typer.colors.YELLOW,
+        ))
+        raise typer.Exit(code=1)
+
+    if not events and not config.MESSAGES_DB.exists():
+        typer.echo(typer.style(
+            f"No local message store yet at {config.MESSAGES_DB}",
             fg=typer.colors.YELLOW,
         ))
         typer.echo("Is the daemon running? "
                    "Try: systemctl --user status iphonebridge")
         raise typer.Exit(code=1)
 
-    raw_lines = config.EVENTS_JSONL.read_text(errors="replace").strip().splitlines()
-    events: list[dict] = []
-    for line in raw_lines:
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-
     if filter_phone_norms or from_text_lower:
         events = [e for e in events if passes_from_filter(e)]
 
-    events = events[-n:][::-1]
+    # Newest first for display (store returns oldest-first within the window).
+    events = list(reversed(events[-n:]))
     if not events:
         typer.echo("(no events)")
         return
@@ -301,7 +307,7 @@ def sms_list(
     for e in events:
         sender = e.get("contact_name") or e.get("sender_phone") or "?"
         body = e.get("body") or ""
-        ts_raw = e.get("seen_at", "")
+        ts_raw = e.get("timestamp") or e.get("seen_at") or ""
         try:
             dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
             ts = dt.astimezone().strftime("%m-%d %H:%M")
