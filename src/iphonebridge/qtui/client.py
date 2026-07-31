@@ -24,7 +24,7 @@ from PySide6.QtDBus import (
 )
 
 from iphonebridge import config
-from iphonebridge.message_store import MessageStore
+from iphonebridge.message_store import default_store
 
 log = logging.getLogger(__name__)
 
@@ -332,7 +332,11 @@ class DaemonClient(QObject):
         incremental disk sync.
         """
         try:
-            return MessageStore().read_events(
+            # Shared process-wide store — a fresh MessageStore() per call
+            # opened a new sqlite connection (64 MiB page cache + 256 MiB
+            # mmap) every 10s sync and never closed it until GC, which is
+            # what pushed the UI's RSS into multi-GB territory.
+            return default_store().read_events(
                 kinds, after_id=after_id, limit=limit
             )
         except Exception as e:
@@ -347,7 +351,7 @@ class DaemonClient(QObject):
     ) -> list[tuple[int, dict]]:
         """Like read_events, but each item is `(row_id, event)` for cursors."""
         try:
-            return MessageStore().read_events_with_ids(
+            return default_store().read_events_with_ids(
                 kinds, after_id=after_id, limit=limit
             )
         except Exception as e:

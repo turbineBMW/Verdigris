@@ -63,30 +63,98 @@ Item {
             // No window-wide header: the only nav row lives at the top of
             // the conversation sidebar (see ConversationsPage). Other pages
             // get a bare chrome strip so the window is still movable and
-            // closable from them.
+            // closable from them. Fades with the page switch so chrome does
+            // not hard-cut while the page stack crossfades.
             WindowChrome {
                 Layout.fillWidth: true
-                visible: root.pageIndex !== 0
+                Layout.preferredHeight: root.pageIndex !== 0 ? implicitHeight : 0
+                opacity: root.pageIndex !== 0 ? 1 : 0
+                visible: Layout.preferredHeight > 0.5 || opacity > 0.01
+                clip: true
                 pageIndex: root.pageIndex
                 onPageRequested: (i) => root.pageIndex = i
+                Behavior on Layout.preferredHeight {
+                    NumberAnimation {
+                        duration: Theme.animBase
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                Behavior on opacity {
+                    NumberAnimation { duration: Theme.animBase }
+                }
             }
 
             // ---- pages -------------------------------------------------
-            StackLayout {
+            // StackLayout only shows one child and hard-cuts. An overlay
+            // host keeps every page mounted and crossfades opacity so
+            // Messages ↔ placeholders feel continuous.
+            Item {
+                id: pageHost
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: root.pageIndex
 
                 ConversationsPage {
                     id: conversations
+                    anchors.fill: parent
                     sidebarVisible: root.sidebarVisible
                     pageIndex: root.pageIndex
                     onPageRequested: (i) => root.pageIndex = i
+                    opacity: root.pageIndex === 0 ? 1 : 0
+                    visible: opacity > 0.01
+                    enabled: root.pageIndex === 0
+                    z: root.pageIndex === 0 ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                 }
 
-                PlaceholderPage { label: "Notifications" }
-                PlaceholderPage { label: "Calls" }
-                PlaceholderPage { label: "Setup" }
+                PlaceholderPage {
+                    anchors.fill: parent
+                    label: "Notifications"
+                    opacity: root.pageIndex === 1 ? 1 : 0
+                    visible: opacity > 0.01
+                    enabled: root.pageIndex === 1
+                    z: root.pageIndex === 1 ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                }
+
+                PlaceholderPage {
+                    anchors.fill: parent
+                    label: "Calls"
+                    opacity: root.pageIndex === 2 ? 1 : 0
+                    visible: opacity > 0.01
+                    enabled: root.pageIndex === 2
+                    z: root.pageIndex === 2 ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                }
+
+                PlaceholderPage {
+                    anchors.fill: parent
+                    label: "Setup"
+                    opacity: root.pageIndex === 3 ? 1 : 0
+                    visible: opacity > 0.01
+                    enabled: root.pageIndex === 3
+                    z: root.pageIndex === 3 ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                }
             }
         }
     }

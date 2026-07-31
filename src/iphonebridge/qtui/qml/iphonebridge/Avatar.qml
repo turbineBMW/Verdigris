@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Window
+import iphonebridge
 
 // Circular contact photo with an initials fallback.
 //
@@ -7,6 +8,9 @@ import QtQuick.Window
 // this draws a plain Image. Masking here instead cost two multisampled
 // render targets per avatar; with a list of forty conversations that was
 // over a hundred framebuffers and it visibly stalled scrolling.
+//
+// Initials stay painted underneath; the photo fades in once decoded so a
+// late avatar does not hard-swap over the monogram.
 Item {
     id: root
     property string source: ""
@@ -20,7 +24,6 @@ Item {
         anchors.fill: parent
         radius: width / 2
         antialiasing: true
-        visible: img.status !== Image.Ready
         // Stable per-contact tint, so the same person keeps the same colour.
         color: Qt.hsla((root.initials.charCodeAt(0) % 12) / 12, 0.45, 0.45, 1)
 
@@ -46,5 +49,15 @@ Item {
         sourceSize.height: sourceSize.width
         smooth: true
         mipmap: true
+        // Fade over the monogram when the decode lands (or when the source
+        // changes and a new decode finishes). Null/error keep opacity 0 so
+        // initials remain the face of the contact.
+        opacity: status === Image.Ready ? 1 : 0
+        Behavior on opacity {
+            NumberAnimation {
+                duration: Theme.animBase
+                easing.type: Easing.OutCubic
+            }
+        }
     }
 }

@@ -35,6 +35,7 @@ from iphonebridge.events import _detect_reaction, normalize_phone
 from iphonebridge.message_store import (
     DEFAULT_MESSAGE_PAGE,
     MessageStore,
+    default_store,
     thread_key_for,
 )
 from iphonebridge.qtui.emoji import search as emoji_search
@@ -367,16 +368,27 @@ class _DictListModel(QAbstractListModel):
         top. When the same rows are present in the same order — the common
         case, where only a preview or timestamp changed — emit dataChanged
         instead, which updates in place and leaves scrolling alone.
+
+        Per-row + per-role: only emit for cells that actually differ so QML
+        does not rebind every avatar and Text on a stamp tick.
         """
         if self._IDENTITY is not None and len(rows) == len(self._rows):
             same = all(a.get(self._IDENTITY) == b.get(self._IDENTITY)
                        for a, b in zip(rows, self._rows, strict=True))
             if same:
-                self._rows = rows
-                if rows:
-                    self.dataChanged.emit(
-                        self.index(0, 0), self.index(len(rows) - 1, 0),
-                        list(self._ROLES.keys()))
+                for i, (a, b) in enumerate(zip(rows, self._rows, strict=True)):
+                    roles = [
+                        role for role, field in self._ROLES.items()
+                        if a.get(field) != b.get(field)
+                    ]
+                    if roles:
+                        self._rows[i] = a
+                        idx = self.index(i, 0)
+                        self.dataChanged.emit(idx, idx, roles)
+                    else:
+                        # Keep the live dict so later in-place mutators still
+                        # share identity with the model.
+                        self._rows[i] = a
                 return
 
         self.beginResetModel()
@@ -674,7 +686,10 @@ class ThreadStore(QObject):
         self._last_event_id: int = 0
         self._last_write_seq: int = 0
         self._contacts = ContactsResolver()
-        self._db = MessageStore()
+        # Same process-wide connection as DaemonClient history reads —
+        # see client.read_events. (Search still opens a private store on
+        # the worker thread and closes it.)
+        self._db = default_store()
         # Ordered, not a set: the pinned grid is user-arrangeable by drag,
         # so the order the user put them in *is* the data.
         self._pinned: list[str] = self._load_pinned()
@@ -940,11 +955,10 @@ class ThreadStore(QObject):
                 break
         if owner is None or owner.get("key") != self._current:
             return
-        # Full rebuild rather than a role-only dataChanged: the caption can
-        # move between bubbles, and partial updates were silently no-oping
-        # for some list identities. Rebuild keeps scroll via SmoothListView's
-        # own pin-to-bottom when already at the end.
-        self._rebuild_messages()
+        # Captions only rewrite two string roles — never the row set. A full
+        # rebuild here used to re-estimate contentHeight and jolt the scroll
+        # on every Delivered/Read.
+        self._refresh_captions()
 
     @staticmethod
     def _stamp_receipt(msg: dict, state: str, timestamp: str) -> bool:
@@ -1086,16 +1100,26 @@ class ThreadStore(QObject):
         # Live upserts often rewrite low rowids (same guid handle), so an
         # id-cursor alone never sees them. write_seq bumps on every write;
         # when it moves, refresh thread summaries from the store.
+        #
+        # Do *not* repage the open conversation on every seq bump: a write
+        # to any of 20k threads (or a state row elsewhere) used to reload
+        # ~60 messages + rebuild every row and jolt the scroll every few
+        # seconds. Live D-Bus already applies open-thread updates; only
+        # repage when this conversation's summary actually moved.
         try:
             seq = self._db.write_seq()
         except Exception:
             seq = self._last_write_seq
         if seq != self._last_write_seq:
             self._last_write_seq = seq
+            open_before = self._open_thread_fingerprint()
             self._refresh_thread_summaries_from_db()
+            open_after = self._open_thread_fingerprint()
             cur = self._current
-            if cur and cur in self._threads:
-                # Open chat: repage so today's low-id live rows appear.
+            if (cur and cur in self._threads
+                    and open_before is not None
+                    and open_after is not None
+                    and open_before != open_after):
                 t = self._threads[cur]
                 if t.get("messages_loaded"):
                     self._load_thread_messages(cur)
@@ -1124,9 +1148,30 @@ class ThreadStore(QObject):
             self._dispatch_search()
 
     def _refresh_thread_summaries_from_db(self) -> None:
-        """Pull latest last_ts/preview/name from the threads table."""
+        """Pull latest last_ts/preview/name from the threads table.
+
+        Runtime refreshes only the sidebar window (+ open/pinned). A full
+        backup can hold 20k+ threads; walking them all on the UI thread
+        every write_seq bump was a multi-frame hitch with no visual gain —
+        only the visible slice can change the sidebar.
+        """
         try:
-            summaries = self._db.list_threads()
+            # Head of the recency list is what the sidebar can show.
+            window = max(self._thread_limit + 40, 80)
+            summaries = self._db.list_threads(limit=window)
+            have = {m["key"] for m in summaries}
+            # Open + pinned may sit outside the window after a long scroll
+            # of quieter chats — still need their previews accurate.
+            extra_keys = []
+            if self._current and self._current not in have:
+                extra_keys.append(self._current)
+            for k in self._pinned:
+                if k not in have and k not in extra_keys:
+                    extra_keys.append(k)
+            for k in extra_keys:
+                meta = self._db.get_thread(k)
+                if meta is not None:
+                    summaries.append(meta)
         except Exception:
             log.exception("refresh thread summaries failed")
             return
@@ -1150,6 +1195,7 @@ class ThreadStore(QObject):
                     "is_group": is_group,
                     "last_ts": meta.get("last_ts") or "",
                     "last_preview": meta.get("last_preview") or "",
+                    "last_event_id": int(meta.get("last_event_id") or 0),
                     "messages_loaded": False,
                     "has_older": True,
                 }
@@ -1161,11 +1207,18 @@ class ThreadStore(QObject):
                     self._by_phone.setdefault(key[4:], key)
                 changed = True
             else:
-                if (meta.get("last_ts") or "") != (thread.get("last_ts") or ""):
+                new_eid = int(meta.get("last_event_id") or 0)
+                if ((meta.get("last_ts") or "") != (thread.get("last_ts") or "")
+                        or (meta.get("last_preview") or "")
+                        != (thread.get("last_preview") or "")
+                        or new_eid != int(thread.get("last_event_id") or 0)):
                     changed = True
                 thread["last_ts"] = meta.get("last_ts") or thread.get("last_ts")
                 thread["last_preview"] = (
                     meta.get("last_preview") or thread.get("last_preview") or ""
+                )
+                thread["last_event_id"] = new_eid or int(
+                    thread.get("last_event_id") or 0
                 )
                 thread["is_group"] = is_group
                 if is_group:
@@ -1206,6 +1259,22 @@ class ThreadStore(QObject):
     def searchQuery(self) -> str:
         return self._search_pending or self._search_query
 
+    def _clear_search_state(self) -> None:
+        """Leave search mode: conversation list back, no leftover hits.
+
+        Bumps generation so any in-flight FTS result is dropped when it
+        lands. Does not touch `_search_pending` — the caller owns that.
+        """
+        self._search_timer.stop()
+        self._search_gen += 1
+        self._search_query = ""
+        self._search_again = False
+        # Can't abort the worker thread, but the gen bump makes its result
+        # a no-op; clear the flag so the next keystroke can dispatch.
+        self._search_inflight = False
+        self._search_model.reload([])
+        self.searchChanged.emit()
+
     @Slot(str)
     def setSearchQuery(self, text: str) -> None:
         """Live search — QML calls this on every keystroke.
@@ -1216,15 +1285,16 @@ class ThreadStore(QObject):
         text = text or ""
         prev_active = self.searchActive
         self._search_pending = text
-        self._search_gen += 1
 
         if not text.strip():
-            self._search_timer.stop()
-            self._search_query = ""
-            self._search_again = False
-            self._search_model.reload([])
-            self.searchChanged.emit()
+            # Empty field must always restore the conversation list. A
+            # finishing FTS used to re-apply hits after clear (model reset
+            # re-enters the event loop; trailing dispatch saw pending!="")
+            # and left searchActive stuck true with no way out.
+            self._clear_search_state()
             return
+
+        self._search_gen += 1
 
         # Flip the list to search mode on the first character, before FTS
         # returns — otherwise the conversation list stays up while typing.
@@ -1246,11 +1316,7 @@ class ThreadStore(QObject):
         """Start a background FTS for the current pending text."""
         q = self._search_pending.strip()
         if not q:
-            self._search_query = ""
-            self._search_model.reload([])
-            self._search_inflight = False
-            self._search_again = False
-            self.searchChanged.emit()
+            self._clear_search_state()
             return
         if self._search_inflight:
             self._search_again = True
@@ -1274,14 +1340,21 @@ class ThreadStore(QObject):
             except Exception:
                 log.exception("search worker failed")
                 hits = []
-            # A newer keystroke won — drop these results and run again.
-            if g != self._search_gen:
+            # Cleared or a newer keystroke won — never paint stale hits.
+            if g != self._search_gen or not self._search_pending.strip():
                 if self._search_pending.strip():
                     self._dispatch_search()
+                elif self.searchActive or self._search_model.rowCount():
+                    # Clear raced with this completion; force the list back.
+                    self._search_query = ""
+                    self._search_model.reload([])
+                    self.searchChanged.emit()
                 return
-            self._apply_search_hits(query, hits)
-            # Trailing run if the user kept typing during this query.
-            if self._search_again or self._search_pending.strip() != query:
+            self._apply_search_hits(query, hits, gen=g)
+            # Trailing run only while the field still has text (clearing
+            # sets pending to "" — must not restart search from that).
+            pending = self._search_pending.strip()
+            if pending and (self._search_again or pending != query):
                 self._search_again = False
                 self._dispatch_search()
 
@@ -1295,8 +1368,20 @@ class ThreadStore(QObject):
         finally:
             store.close()
 
-    def _apply_search_hits(self, query: str, hits: list[dict]) -> None:
-        self._search_query = query
+    def _apply_search_hits(
+        self, query: str, hits: list[dict], *, gen: int | None = None
+    ) -> None:
+        # Refuse stale or cleared queries. `reload` → endResetModel can
+        # re-enter the event loop (user hits × mid-apply); re-check before
+        # committing so we never leave searchActive stuck on old hits.
+        q = (query or "").strip()
+        if not q:
+            return
+        if gen is not None and gen != self._search_gen:
+            return
+        if q != self._search_pending.strip():
+            return
+
         rows = []
         for h in hits:
             phone = h.get("phone") or ""
@@ -1320,7 +1405,24 @@ class ThreadStore(QObject):
                 "eventId": int(h.get("eventId") or 0),
                 "guid": h.get("guid") or "",
             })
+            # Mid-build clear (slow avatar work on a big hit list).
+            if gen is not None and gen != self._search_gen:
+                return
+            if q != self._search_pending.strip():
+                return
+
+        if gen is not None and gen != self._search_gen:
+            return
+        if q != self._search_pending.strip():
+            return
+
+        self._search_query = q
         self._search_model.reload(rows)
+        # Reload may re-enter; only advertise active search if still wanted.
+        if q != self._search_pending.strip() or (
+                gen is not None and gen != self._search_gen):
+            self._search_query = ""
+            self._search_model.reload([])
         self.searchChanged.emit()
 
     @Slot()
@@ -1682,6 +1784,7 @@ class ThreadStore(QObject):
                 "is_group": is_group,
                 "last_ts": meta.get("last_ts") or "",
                 "last_preview": meta.get("last_preview") or "",
+                "last_event_id": int(meta.get("last_event_id") or 0),
                 "messages_loaded": False,
                 "has_older": True,
             }
@@ -1831,7 +1934,8 @@ class ThreadStore(QObject):
             if target is not None:
                 self._apply_reaction(target, verb, self._reactor(ev, outgoing))
                 if refresh and self._current == key:
-                    self._rebuild_messages()
+                    # Badge list only — never reshape the message list.
+                    self._refresh_reactions(target)
             return
 
         body = ev.get("body") or ""
@@ -2756,6 +2860,84 @@ class ThreadStore(QObject):
         rows[-1]["reactions"] = reactions
         return rows
 
+    def _open_thread_fingerprint(self) -> tuple | None:
+        """Cheap signature of the open conversation's store summary.
+
+        Used by disk sync to decide whether a write_seq bump actually
+        touched the chat on screen (vs. some other of the ~20k threads).
+        """
+        key = self._current
+        if not key:
+            return None
+        t = self._threads.get(key)
+        if t is None:
+            return None
+        # last_ts + preview only: last_event_id is often stale on the live
+        # path (D-Bus does not carry the store row id), so including it
+        # forced a full repage after every send even when the UI already
+        # had the message.
+        return (key, t.get("last_ts") or "", t.get("last_preview") or "")
+
+    def _refresh_captions(self) -> None:
+        """Repaint delivery captions without rebuilding the message list."""
+        thread = self._threads.get(self._current)
+        if thread is None:
+            return
+        rows = self._message_model.rows()
+        if not rows:
+            return
+        self._apply_delivery_captions(thread["messages"], rows)
+        self._message_model.captions_changed()
+
+    def _refresh_reactions(self, msg: dict) -> None:
+        """Update reaction badges on the rows that belong to `msg` in place.
+
+        Reactions always sit on the last row of a multi-part message (photo +
+        caption). Matching by message identity in `rowKey` keeps us correct
+        even when the guid is still empty.
+        """
+        reactions = list(dict.fromkeys((msg.get("reactions") or {}).values()))
+        prefix = f"{id(msg)}-"
+        rows = self._message_model.rows()
+        if not rows:
+            return
+        last_i = -1
+        for i, r in enumerate(rows):
+            if str(r.get("rowKey") or "").startswith(prefix):
+                last_i = i
+                if r.get("reactions") != []:
+                    r["reactions"] = []
+        if last_i < 0:
+            # Fallback: guid match (rows rebuilt with a different msg id).
+            guid = msg.get("guid") or ""
+            if not guid:
+                self._rebuild_messages()
+                return
+            for i, r in enumerate(rows):
+                if r.get("guid") == guid:
+                    last_i = i
+                    if r.get("reactions") != []:
+                        r["reactions"] = []
+            if last_i < 0:
+                self._rebuild_messages()
+                return
+        rows[last_i]["reactions"] = reactions
+        idx = self._message_model.index(last_i, 0)
+        # Also repaint earlier siblings that may have lost a stale badge.
+        first_i = last_i
+        for i in range(last_i, -1, -1):
+            rk = str(rows[i].get("rowKey") or "")
+            if rk.startswith(prefix) or (
+                    msg.get("guid") and rows[i].get("guid") == msg.get("guid")):
+                first_i = i
+            else:
+                break
+        self._message_model.dataChanged.emit(
+            self._message_model.index(first_i, 0),
+            idx,
+            [MessageListModel.ReactionsRole],
+        )
+
     def _rebuild_messages(self) -> None:
         thread = self._threads.get(self._current)
         if thread is None:
@@ -2902,11 +3084,36 @@ class ThreadStore(QObject):
             self._suppress_land_at_end = False
             self.landAtEndSuppressedChanged.emit()
 
+    def _trim_thread_window(self, thread: dict) -> None:
+        """Keep only the newest page in memory after accidental over-fetch.
+
+        Auto-paging used to pull whole archives into RAM on open; switching
+        away and back then rebuilt thousands of rows. Cap to one page so
+        re-open is cheap; scroll-up still pages older history on demand.
+        """
+        msgs = thread.get("messages") or []
+        cap = _MESSAGE_PAGE
+        if len(msgs) <= cap * 2:
+            return
+        drop = msgs[:-cap]
+        keep = msgs[-cap:]
+        for m in drop:
+            g = m.get("guid")
+            if g and self._by_guid.get(g) is m:
+                self._by_guid.pop(g, None)
+        thread["messages"] = keep
+        thread["has_older"] = True
+        thread["_dupe_index"] = None
+
     def _open(self, key: str, *, mark_read: bool) -> None:
         self._current = key
         thread = self._threads.get(key)
         if thread is not None and not thread.get("messages_loaded"):
             self._load_thread_messages(key)
+        elif thread is not None and thread.get("messages_loaded"):
+            # Drop history that was bulk-paged earlier (or before the open
+            # auto-page fix) so we don't rebuild multi-k rows every switch.
+            self._trim_thread_window(thread)
         if thread is not None and mark_read:
             self._mark_read(thread)
             self._refresh_threads()

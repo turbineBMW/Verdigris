@@ -40,5 +40,11 @@ Item {
         colorizationColor: root.color
         // Avoid flashing a full-white glyph before the tint applies.
         opacity: img.status === Image.Ready ? 1 : 0
+        Behavior on colorizationColor {
+            ColorAnimation { duration: Theme.animFast }
+        }
+        Behavior on opacity {
+            NumberAnimation { duration: Theme.animFast }
+        }
     }
 }

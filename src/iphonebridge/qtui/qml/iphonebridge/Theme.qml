@@ -58,10 +58,24 @@ QtObject {
 
     readonly property int radiusBubble: 18
     readonly property int radiusRow: 10
-    readonly property int animFast: 120
-    readonly property int animBase: 180
+
+    // When true, all motion tokens collapse so Behaviors and Transitions
+    // effectively snap. Wired as a single switch so accessibility (or a
+    // future Settings toggle) does not have to chase every call site.
+    // Durations stay ≥1ms: a pure 0 can leave some Transition paths stuck.
+    property bool reducedMotion: false
+
+    readonly property int animFast: reducedMotion ? 1 : 120
+    readonly property int animBase: reducedMotion ? 1 : 180
     // A message arriving, and the receipt caption that follows it. Slower
     // than animBase on purpose: this one is meant to be watched, where the
     // rest of the motion here is meant to get out of the way.
-    readonly property int animArrive: 300
+    readonly property int animArrive: reducedMotion ? 1 : 300
+    // Press/dismiss and other micro motion that should feel snappier than
+    // animFast — menu exit, clear-button pop, chip press recovery.
+    readonly property int animMicro: reducedMotion ? 1 : 90
+    // Bubble-menu enter scale and emoji-chip hover growth. At 1.0 under
+    // reduced motion so scale pops become no-ops rather than jarring jumps.
+    readonly property real popScale: reducedMotion ? 1.0 : 0.92
+    readonly property real hoverScale: reducedMotion ? 1.0 : 1.12
 }

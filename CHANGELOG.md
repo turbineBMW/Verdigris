@@ -4,6 +4,17 @@
 
 Two subsystems that did not exist at 0.1.0, plus the app that renders them.
 
+### Performance
+- **Scroll and live updates no longer hitch on large histories** (~200k
+  events / ~20k threads). Receipts and tapbacks repaint in place instead of
+  rebuilding the message list; disk sync no longer reloads the open chat on
+  every store write; runtime thread-summary refresh only pulls the sidebar
+  window; the sidebar shadow sits on a static plate so scrolling does not
+  re-rasterize the list; avatar PNGs and SQLite page cache/mmap are
+  memoized for cold reads. (Message-list `reuseItems` and solid edge-fade
+  overlays were tried and reverted — they stretched bubbles full-width and
+  painted black bars over the frosted glass fade.)
+
 ### Changed
 - **Message history is SQLite** (`~/.local/state/iphonebridge/messages.sqlite`).
   The daemon (`SqliteSink`) and `backup-sync` write one store; the Qt UI and

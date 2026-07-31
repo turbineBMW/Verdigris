@@ -95,3 +95,51 @@ def test_multi_row_message_gets_distinct_keys(store):
     rows = store._rows_for(msg, None)
     assert len(rows) == 2
     assert rows[0]["rowKey"] != rows[1]["rowKey"]
+
+
+def test_receipt_caption_updates_in_place(store):
+    """Delivered/Read must not rebuild the message list (scroll jolt)."""
+    msg = store._threads["k"]["messages"][-1]
+    msg["guid"] = "G1"
+    msg["state"] = "delivered"
+    store._rebuild_messages()
+    resets, changes = _counts(store._message_model)
+    msg["state"] = "read"
+    store._refresh_captions()
+    assert resets == []
+    assert changes
+    assert any(r.get("deliveryState") == "read"
+               for r in store._message_model.rows())
+
+
+def test_reaction_badge_updates_in_place(store):
+    msg = store._threads["k"]["messages"][1]
+    msg["guid"] = "G2"
+    msg["reactions"] = {"tel:+1": "❤️"}
+    store._rebuild_messages()
+    resets, changes = _counts(store._message_model)
+    msg["reactions"] = {"tel:+1": "❤️", "tel:+2": "😂"}
+    store._refresh_reactions(msg)
+    assert resets == []
+    assert changes
+    last = [r for r in store._message_model.rows() if r.get("guid") == "G2"][-1]
+    assert last["reactions"] == ["❤️", "😂"]
+
+
+def test_thread_reload_skips_unchanged_rows():
+    """Sidebar stamp ticks must not dataChanged every cell."""
+    m = MessageListModel()
+    # Use ThreadListModel's identity via a bare model with _IDENTITY set.
+    m._IDENTITY = "rowKey"
+    m._ROLES = {1: "rowKey", 2: "preview", 3: "stamp"}
+    m._role_names = {1: b"rowKey", 2: b"preview", 3: b"stamp"}
+    m.reload([{"rowKey": "a", "preview": "hi", "stamp": "1m"},
+              {"rowKey": "b", "preview": "yo", "stamp": "2m"}])
+    changes = []
+    m.dataChanged.connect(
+        lambda top, bot, roles: changes.append(
+            (top.row(), bot.row(), list(roles))))
+    m.reload([{"rowKey": "a", "preview": "hi", "stamp": "2m"},
+              {"rowKey": "b", "preview": "yo", "stamp": "2m"}])
+    # Only row 0's stamp changed.
+    assert changes == [(0, 0, [3])]

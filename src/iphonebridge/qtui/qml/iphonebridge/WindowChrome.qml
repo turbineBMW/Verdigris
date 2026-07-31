@@ -41,10 +41,18 @@ Item {
                 width: 12; height: 12; radius: 6
                 color: modelData.c
                 antialiasing: true
-                opacity: lightsHover.hovered ? 1.0 : 0.9
+                opacity: lightHover.hovered ? 1.0 : 0.9
+                scale: lightHover.hovered ? 1.1 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.animFast }
                 }
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: Theme.animFast
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                HoverHandler { id: lightHover }
                 MouseArea {
                     anchors.fill: parent
                     anchors.margins: -2
@@ -56,7 +64,6 @@ Item {
                 }
             }
         }
-        HoverHandler { id: lightsHover }
     }
 
     ToolButton {
@@ -72,6 +79,13 @@ Item {
         // Accessible name for the global-menu-style page picker.
         Accessible.name: "Menu"
         onClicked: pageMenu.popup(menuButton, 0, menuButton.height)
+        scale: down ? 0.94 : (hovered ? 1.05 : 1.0)
+        Behavior on scale {
+            NumberAnimation {
+                duration: Theme.animFast
+                easing.type: Easing.OutCubic
+            }
+        }
 
         contentItem: Item {
             // ToolButton sizes this to the content area; centre the glyph.
@@ -89,10 +103,33 @@ Item {
             color: menuButton.down ? Qt.rgba(1, 1, 1, 0.12)
                  : menuButton.hovered ? Qt.rgba(1, 1, 1, 0.08)
                  : "transparent"
+            Behavior on color {
+                ColorAnimation { duration: Theme.animFast }
+            }
         }
 
         Menu {
             id: pageMenu
+            enter: Transition {
+                ParallelAnimation {
+                    NumberAnimation {
+                        property: "opacity"; from: 0; to: 1
+                        duration: Theme.animFast
+                    }
+                    NumberAnimation {
+                        property: "scale"
+                        from: Theme.popScale; to: 1
+                        duration: Theme.animFast
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+            exit: Transition {
+                NumberAnimation {
+                    property: "opacity"; to: 0
+                    duration: Theme.animMicro
+                }
+            }
             Repeater {
                 model: ["Messages", "Notifications", "Calls", "Setup"]
                 delegate: MenuItem {

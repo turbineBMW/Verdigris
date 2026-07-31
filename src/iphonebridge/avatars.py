@@ -24,6 +24,11 @@ _SIZE = 128
 # visibly stepped edges.
 _SUPERSAMPLE = 4
 
+# Process-local memo: (src, size, mtime) → path. Sidebar refresh hits every
+# visible conversation dozens of times a minute; the disk PNG is already
+# cheap, but the mtime/stat round-trips still add up.
+_MEMO: dict[tuple[str, int], tuple[float, str | None]] = {}
+
 
 def circular(src: str | Path | None, size: int = _SIZE) -> str | None:
     """Round-cropped PNG for `src`, cached. Returns None when unavailable.
@@ -35,21 +40,32 @@ def circular(src: str | Path | None, size: int = _SIZE) -> str | None:
         return None
     source = Path(src)
     try:
-        if not source.exists():
-            return None
+        st = source.stat()
     except OSError:
         return None
+    if not source.is_file():
+        return None
+
+    key = (str(source), size)
+    mtime = st.st_mtime
+    hit = _MEMO.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
 
     try:
         from PIL import Image, ImageDraw
     except Exception:
-        return str(source)
+        result = str(source)
+        _MEMO[key] = (mtime, result)
+        return result
 
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         dest = CACHE_DIR / f"{source.stem}_{size}.png"
-        if dest.exists() and dest.stat().st_mtime >= source.stat().st_mtime:
-            return str(dest)
+        if dest.exists() and dest.stat().st_mtime >= mtime:
+            result = str(dest)
+            _MEMO[key] = (mtime, result)
+            return result
 
         img = Image.open(source).convert("RGBA")
         # Centre-crop to a square first, or the circle comes out an ellipse.
@@ -67,7 +83,11 @@ def circular(src: str | Path | None, size: int = _SIZE) -> str | None:
         out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         out.paste(img, (0, 0), mask)
         out.save(dest, "PNG")
-        return str(dest)
+        result = str(dest)
+        _MEMO[key] = (mtime, result)
+        return result
     except Exception:
         log.debug("could not round-crop %s", src, exc_info=True)
-        return str(source)
+        result = str(source)
+        _MEMO[key] = (mtime, result)
+        return result

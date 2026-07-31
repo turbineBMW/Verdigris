@@ -64,6 +64,12 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_thread_ts ON events(thread_key, id);
 CREATE INDEX IF NOT EXISTS idx_events_thread_msg
     ON events(thread_key, id) WHERE kind IN ('sms_received', 'sms_sent');
+-- Paging is ORDER BY ts_epoch DESC, id DESC LIMIT N. Without this, SQLite
+-- used idx_events_thread_msg then a TEMP B-TREE over the whole thread
+-- (20k+ rows on busy chats) for every open / scroll-up page.
+CREATE INDEX IF NOT EXISTS idx_events_thread_ts_epoch
+    ON events(thread_key, ts_epoch DESC, id DESC)
+    WHERE kind IN ('sms_received', 'sms_sent');
 CREATE INDEX IF NOT EXISTS idx_events_reaction_target
     ON events(reaction_target) WHERE is_reaction = 1;
 CREATE INDEX IF NOT EXISTS idx_threads_last_ts ON threads(last_ts);
@@ -379,6 +385,15 @@ class MessageStore:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA temp_store=MEMORY")
+            # Large histories (200k+ rows) need a real page cache or every
+            # thread open / FTS hit re-reads cold pages off disk.
+            # mmap is intentionally modest: each open connection maps this
+            # many bytes, and a leaked MessageStore() used to multiply the
+            # mapping until the UI's RSS looked multi-GB (same pages counted
+            # once per VMA). One shared connection + ~64 MiB is enough.
+            conn.execute("PRAGMA cache_size=-65536")  # 64 MiB
+            conn.execute("PRAGMA mmap_size=67108864")  # 64 MiB
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.executescript(_SCHEMA)
             self._ensure_columns(conn)
             conn.executescript(_INDEXES)
@@ -905,19 +920,32 @@ class MessageStore:
             params.append(limit)
         with self.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [
-            {
-                "key": r["key"],
-                "name": r["name"] or r["key"],
-                "phone": r["phone"],
-                "is_group": bool(r["is_group"]),
-                "last_ts": r["last_ts"],
-                "last_preview": r["last_preview"] or "",
-                "last_event_id": int(r["last_event_id"] or 0),
-                "last_ts_epoch": float(r["last_ts_epoch"] or 0),
-            }
-            for r in rows
-        ]
+        return [self._thread_row(r) for r in rows]
+
+    def get_thread(self, key: str) -> dict | None:
+        """One conversation summary, or None."""
+        if not key:
+            return None
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT key, name, phone, is_group, last_ts, last_preview, "
+                "last_event_id, last_ts_epoch FROM threads WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return self._thread_row(row) if row is not None else None
+
+    @staticmethod
+    def _thread_row(r: sqlite3.Row) -> dict:
+        return {
+            "key": r["key"],
+            "name": r["name"] or r["key"],
+            "phone": r["phone"],
+            "is_group": bool(r["is_group"]),
+            "last_ts": r["last_ts"],
+            "last_preview": r["last_preview"] or "",
+            "last_event_id": int(r["last_event_id"] or 0),
+            "last_ts_epoch": float(r["last_ts_epoch"] or 0),
+        }
 
     def count_unread(self, thread_key: str, after_ts: str | None) -> int:
         """Incoming non-reaction messages newer than the user's read mark.

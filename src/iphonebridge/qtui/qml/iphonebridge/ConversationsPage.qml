@@ -105,6 +105,32 @@ Item {
         standardButtons: Dialog.Cancel | Dialog.Discard
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; from: 0; to: 1
+                    duration: Theme.animFast
+                }
+                NumberAnimation {
+                    property: "scale"; from: 0.96; to: 1
+                    duration: Theme.animFast
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"; to: 0
+                    duration: Theme.animFast
+                }
+                NumberAnimation {
+                    property: "scale"; to: 0.96
+                    duration: Theme.animFast
+                }
+            }
+        }
+
         onDiscarded: {
             threadStore.deleteThread(threadKey)
             close()
@@ -138,33 +164,53 @@ Item {
         // Floating card rather than a full-height panel: inset on all
         // sides, rounded, with a soft shadow so it reads as sitting above
         // the conversation.
-        Rectangle {
-            id: sidebar
+        Item {
+            id: sidebarShell
             Layout.preferredWidth: page.sidebarVisible ? 292 : 0
             Layout.fillHeight: true
             Layout.margins: 10
             Layout.rightMargin: 4
-            clip: true
-            radius: 14
-            color: Theme.sidebarBg
-            visible: Layout.preferredWidth > 0
-
-            layer.enabled: true
-            layer.effect: MultiEffect {
-                shadowEnabled: true
-                shadowColor: "black"
-                shadowOpacity: 0.35
-                shadowBlur: 0.6
-                shadowVerticalOffset: 2
-            }
-
+            // Width already eases; opacity rides with it so chrome does not
+            // look crushed into a thin strip mid-collapse (and so reopen is
+            // a fade-in rather than content popping at full opacity in a
+            // zero-width clip).
+            opacity: page.sidebarVisible ? 1 : 0
+            visible: Layout.preferredWidth > 0.5 || opacity > 0.01
+            // Shadow lives on a *static* plate, not on the scrolling list.
+            // Layering the whole sidebar (old approach) re-rasterized every
+            // conversation row into an FBO on each wheel notch.
             Behavior on Layout.preferredWidth {
                 NumberAnimation { duration: Theme.animBase; easing.type: Easing.OutCubic }
             }
+            Behavior on opacity {
+                NumberAnimation { duration: Theme.animBase }
+            }
 
-            ColumnLayout {
+            Rectangle {
+                id: sidebarShadow
                 anchors.fill: parent
-                spacing: 0
+                radius: 14
+                color: Theme.sidebarBg
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    shadowEnabled: true
+                    shadowColor: "black"
+                    shadowOpacity: 0.35
+                    shadowBlur: 0.6
+                    shadowVerticalOffset: 2
+                }
+            }
+
+            Rectangle {
+                id: sidebar
+                anchors.fill: parent
+                radius: 14
+                color: Theme.sidebarBg
+                clip: true
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
 
                 // The window's nav row lives here, at the top of the
                 // sidebar — traffic lights and the hamburger, nothing else.
@@ -174,7 +220,7 @@ Item {
                     onPageRequested: (i) => page.pageRequested(i)
                 }
 
-                // Search — not wired up yet.
+                // Search — type-as-you-go FTS into ThreadStore.
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
@@ -184,8 +230,12 @@ Item {
                     Layout.preferredHeight: 30
                     radius: height / 2
                     color: Qt.rgba(1, 1, 1, 0.07)
-                    border.width: 1
-                    border.color: Theme.separator
+                    border.width: searchField.activeFocus ? 1.5 : 1
+                    border.color: searchField.activeFocus
+                                  ? Theme.accent : Theme.separator
+                    Behavior on border.color {
+                        ColorAnimation { duration: Theme.animFast }
+                    }
 
                     // Anchored rather than a Row: TextField carries its
                     // own left padding, which pushed the placeholder away
@@ -207,8 +257,11 @@ Item {
                         anchors {
                             left: searchIconBox.right
                             leftMargin: 7
-                            right: clearSearch.visible ? clearSearch.left : parent.right
-                            rightMargin: clearSearch.visible ? 4 : 10
+                            // Use `shown`, not `visible`: visible lags the
+                            // fade, and resizing the field to the opacity
+                            // curve made the caret jump while the × eased in.
+                            right: clearSearch.shown ? clearSearch.left : parent.right
+                            rightMargin: clearSearch.shown ? 4 : 10
                             verticalCenter: parent.verticalCenter
                         }
                         height: parent.height
@@ -241,13 +294,31 @@ Item {
                             rightMargin: 12
                             verticalCenter: parent.verticalCenter
                         }
-                        visible: searchField.text.length > 0
+                        // Opacity/scale rather than a hard visible flip so the
+                        // button eases in with the first character instead of
+                        // popping into the trailing edge of the field.
+                        readonly property bool shown: searchField.text.length > 0
+                        visible: opacity > 0.01
+                        opacity: shown ? 1 : 0
+                        scale: shown ? 1 : 0.85
+                        Behavior on opacity {
+                            NumberAnimation { duration: Theme.animFast }
+                        }
+                        Behavior on scale {
+                            NumberAnimation {
+                                duration: Theme.animFast
+                                easing.type: Easing.OutCubic
+                            }
+                        }
                         text: "×"
                         color: Theme.textDim
                         font.pixelSize: 16
                         MouseArea {
                             anchors.fill: parent
                             anchors.margins: -6
+                            // Keep the hit target alive while fading out so a
+                            // late click still clears rather than missing.
+                            enabled: clearSearch.shown
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 searchField.text = ""
@@ -259,20 +330,45 @@ Item {
 
                 // Pinned conversations, avatars only — the iOS grid. Capped
                 // at nine by the store, which wraps to three rows here.
-                // Hidden while searching so results take the full list.
+                // Collapses while searching so results take the full list —
+                // height/opacity ease rather than a hard cut so search entry
+                // does not yank the thread list under the cursor.
                 Item {
                     id: pinnedFlow
                     Layout.fillWidth: true
-                    Layout.topMargin: 12
-                    Layout.bottomMargin: 6
-                    visible: threadStore.pinnedCount > 0 && !threadStore.searchActive
-                    implicitHeight: visible ? pinnedGrid.height : 0
+                    Layout.topMargin: wantShown ? 12 : 0
+                    Layout.bottomMargin: wantShown ? 6 : 0
+                    readonly property bool wantShown:
+                        threadStore.pinnedCount > 0 && !threadStore.searchActive
+                    implicitHeight: wantShown ? pinnedGrid.height : 0
+                    opacity: wantShown ? 1 : 0
+                    // Stay painted while collapsing so the ease is visible.
+                    visible: implicitHeight > 0.5 || opacity > 0.01
+                    clip: true
+                    Behavior on implicitHeight {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
+                    Behavior on Layout.topMargin {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
+                    Behavior on Layout.bottomMargin {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
 
                     // Centre the block as a whole: lay the tiles out in a
                     // grid sized to its own columns, then centre that.
                     Grid {
                         id: pinnedGrid
                         anchors.horizontalCenter: parent.horizontalCenter
+                        // Keep the grid at the top while the shell collapses
+                        // so tiles fade upward rather than floating mid-gap.
+                        anchors.top: parent.top
                         spacing: 10
 
                         // Tiles grow to fill the sidebar. Up to three across
@@ -364,6 +460,8 @@ Item {
                                 height: parent.height
                                 z: pinTile.dragging ? 10 : 0
                                 opacity: pinTile.dragging ? 0.85 : 1.0
+                                // Drag lift only on the shell — hover growth
+                                // lives on the avatar so the two never fight.
                                 scale: pinTile.dragging ? 1.04 : 1.0
 
                                 x: pinnedGrid.cellX(pinTile.effectiveIndex)
@@ -384,6 +482,9 @@ Item {
                                 }
                                 Behavior on scale {
                                     NumberAnimation { duration: Theme.animFast; easing.type: Easing.OutCubic }
+                                }
+                                Behavior on opacity {
+                                    NumberAnimation { duration: Theme.animFast }
                                 }
 
                             // Behind the Column, so the avatar and label paint
@@ -412,6 +513,17 @@ Item {
                                     size: pinnedGrid.avatarSize
                                     source: pinTile.modelData.avatar
                                     initials: pinTile.modelData.initials
+                                    // Pad around the tile was sized for this
+                                    // 6% hover growth so the highlight rim
+                                    // and scaled face stay inside the corner.
+                                    scale: (!pinTile.dragging && pinMouse.containsMouse)
+                                           ? 1.06 : 1.0
+                                    Behavior on scale {
+                                        NumberAnimation {
+                                            duration: Theme.animFast
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
                                 }
                                 // Name, with an unread dot to the left of it.
                                 //
@@ -458,7 +570,14 @@ Item {
                                     Rectangle {
                                         width: 6; height: 6; radius: 3
                                         color: Theme.accent
-                                        visible: parent.unread
+                                        // Same fade the list-row unread dot
+                                        // uses — a hard visible flip next to
+                                        // the name read as a blink.
+                                        opacity: parent.unread ? 1 : 0
+                                        visible: opacity > 0.01
+                                        Behavior on opacity {
+                                            NumberAnimation { duration: Theme.animBase }
+                                        }
                                         anchors.right: pinName.left
                                         anchors.rightMargin: 4
                                         anchors.verticalCenter: pinName.verticalCenter
@@ -550,9 +669,16 @@ Item {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 1
+                    Layout.preferredHeight: pinnedFlow.wantShown ? 1 : 0
                     color: Theme.separator
-                    visible: pinnedFlow.visible
+                    opacity: pinnedFlow.wantShown ? 1 : 0
+                    visible: Layout.preferredHeight > 0.5 || opacity > 0.01
+                    Behavior on Layout.preferredHeight {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
                 }
 
                 // Empty search state
@@ -560,7 +686,14 @@ Item {
                     Layout.fillWidth: true
                     Layout.topMargin: 24
                     horizontalAlignment: Text.AlignHCenter
-                    visible: threadStore.searchActive && threadList.count === 0
+                    // Fade rather than pop when FTS returns nothing.
+                    readonly property bool shown:
+                        threadStore.searchActive && threadList.count === 0
+                    opacity: shown ? 1 : 0
+                    visible: opacity > 0.01
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.animBase }
+                    }
                     text: "No results"
                     color: Theme.textDim
                     font.pixelSize: 13
@@ -573,6 +706,8 @@ Item {
                     Layout.topMargin: 6
                     clip: true
                     spacing: 2
+                    reuseItems: true
+                    cacheBuffer: Math.max(400, height * 2)
                     // Search replaces the conversation list with per-message
                     // hits (one thread may appear many times).
                     model: threadStore.searchActive
@@ -582,6 +717,37 @@ Item {
                     currentIndex: 0
                     // No visible scrollbar in the conversation list.
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
+
+                    // Real model inserts/deletes only — a model reset (search
+                    // enter/exit, page load) raises no add transition, so the
+                    // full list does not cascade-animate on every query.
+                    add: Transition {
+                        ParallelAnimation {
+                            NumberAnimation {
+                                property: "opacity"; from: 0; to: 1
+                                duration: Theme.animBase
+                                easing.type: Easing.OutCubic
+                            }
+                            NumberAnimation {
+                                property: "x"; from: -8; to: 0
+                                duration: Theme.animBase
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
+                    remove: Transition {
+                        NumberAnimation {
+                            property: "opacity"; to: 0
+                            duration: Theme.animFast
+                        }
+                    }
+                    displaced: Transition {
+                        NumberAnimation {
+                            properties: "y"
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
 
                     // A model reset (new page, thread added/removed) still
                     // drops contentY to 0. Put it back so the list doesn't
@@ -651,9 +817,25 @@ Item {
                         // A pinned conversation moves into the grid above
                         // rather than appearing in both places — but search
                         // results always show, even if that thread is pinned.
+                        // Height/opacity ease on pin so the row collapses
+                        // instead of vanishing in one frame (ListView remove
+                        // only fires when the model drops the row entirely).
                         width: threadList.width
-                        visible: threadStore.searchActive || !pinned
-                        height: visible ? 58 : 0
+                        readonly property bool shown:
+                            threadStore.searchActive || !pinned
+                        height: shown ? 58 : 0
+                        opacity: shown ? 1 : 0
+                        visible: height > 0.5 || opacity > 0.01
+                        clip: true
+                        Behavior on height {
+                            NumberAnimation {
+                                duration: Theme.animFast
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                        Behavior on opacity {
+                            NumberAnimation { duration: Theme.animFast }
+                        }
 
                         Rectangle {
                             anchors {
@@ -758,6 +940,26 @@ Item {
 
                                 Menu {
                                     id: rowMenu
+                                    enter: Transition {
+                                        ParallelAnimation {
+                                            NumberAnimation {
+                                                property: "opacity"; from: 0; to: 1
+                                                duration: Theme.animFast
+                                            }
+                                            NumberAnimation {
+                                                property: "scale"
+                                                from: Theme.popScale; to: 1
+                                                duration: Theme.animFast
+                                                easing.type: Easing.OutCubic
+                                            }
+                                        }
+                                    }
+                                    exit: Transition {
+                                        NumberAnimation {
+                                            property: "opacity"; to: 0
+                                            duration: Theme.animMicro
+                                        }
+                                    }
                                     MenuItem {
                                         text: threadDelegate.pinned ? "Unpin" : "Pin"
                                         onTriggered: threadStore.togglePin(
@@ -780,7 +982,8 @@ Item {
                     }
                 }
             }
-        }
+            } // sidebar
+        } // sidebarShell
 
         // No divider — the sidebar floats, so its own edge separates it.
 
@@ -847,10 +1050,18 @@ Item {
                     menu.close()
                 }
 
-                // Empty state
+                // Empty state — fades with the conversation chrome so
+                // opening a thread is one surface change, not a hard cut.
                 Text {
                     anchors.centerIn: parent
-                    visible: !msgArea.hasThread
+                    opacity: msgArea.hasThread ? 0 : 1
+                    visible: opacity > 0.01
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: Theme.animFast
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                     text: "Select a conversation"
                     color: Theme.textDim
                     font.pixelSize: 18
@@ -873,6 +1084,26 @@ Item {
 
                 Menu {
                     id: chatMenu
+                    enter: Transition {
+                        ParallelAnimation {
+                            NumberAnimation {
+                                property: "opacity"; from: 0; to: 1
+                                duration: Theme.animFast
+                            }
+                            NumberAnimation {
+                                property: "scale"
+                                from: Theme.popScale; to: 1
+                                duration: Theme.animFast
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
+                    exit: Transition {
+                        NumberAnimation {
+                            property: "opacity"; to: 0
+                            duration: Theme.animMicro
+                        }
+                    }
                     MenuItem {
                         text: msgArea.showTimes ? "Hide Times" : "Show Times"
                         onTriggered: msgArea.showTimes = !msgArea.showTimes
@@ -961,7 +1192,13 @@ Item {
                 // estimate, which shifts contentY under the pointer — the
                 // jitter. Building a screenful either side means heights are
                 // already known by the time they matter.
-                cacheBuffer: 1200
+                cacheBuffer: Math.max(1600, height * 3)
+                // Deliberately no reuseItems. Bubbles pin with
+                // `anchors.left/right: outgoing ? … : undefined`, and on
+                // recycle Qt does not clear the previous side's anchor when
+                // the binding becomes undefined — so a reused outgoing row
+                // kept its left edge and stretched across the whole thread
+                // (and incoming rows stretched off-screen to the right).
 
                 // Scroll-up paging: when the user nears the top, pull older
                 // history from SQLite. Guarded on count so we only ask once
@@ -1273,6 +1510,10 @@ Item {
                 // was costing more than it bought. Bubbles are drawn by
                 // Shape's curve renderer, which antialiases analytically,
                 // and text and images bring their own.
+                //
+                // Do not replace this with solid overlay rects: the page
+                // background is translucent over KWin blur, so a solid
+                // pageBgSolid gradient reads as a black bar, not a dissolve.
                 layer.enabled: true
                 layer.smooth: true
                 layer.effect: OpacityMask {
@@ -1798,6 +2039,17 @@ Item {
                     // and restarts the end-aim fight.
                     if (jumpLock)
                         return
+                    // Only when the *user* has scrolled up a list that
+                    // actually overflows. A first page that fits the
+                    // viewport keeps contentY ≈ originY forever, so the
+                    // naive "near top" test paginated the entire archive
+                    // (20k+ rows on busy threads) into memory on open —
+                    // multi-second freezes that looked like "loading too
+                    // many messages".
+                    if (!landed || justOpened || pinBottom || !userTookControl)
+                        return
+                    if (contentHeight <= height + 80)
+                        return
                     if (contentY < originY + 200
                             && count > 0
                             && count !== _olderRequestAt) {
@@ -1920,6 +2172,40 @@ Item {
                     // counts, and history would otherwise pad every edited
                     // message forever.
                     property bool showEdits: false
+
+                    // One soft scale pulse when this bubble becomes the
+                    // jump target (search hit or reply-quote). `_didPulse`
+                    // keeps scroll-away/back from replaying it until the
+                    // highlight is cleared and set again.
+                    property real rimScale: 1.0
+                    property bool _didPulse: false
+                    onHighlightChanged: {
+                        if (highlight) {
+                            if (!_didPulse) {
+                                _didPulse = true
+                                rimPop.restart()
+                            }
+                        } else {
+                            _didPulse = false
+                            rimScale = 1.0
+                            rimPop.stop()
+                        }
+                    }
+                    SequentialAnimation {
+                        id: rimPop
+                        NumberAnimation {
+                            target: msgDelegate; property: "rimScale"
+                            from: 1.0; to: 1.03
+                            duration: 140
+                            easing.type: Easing.OutCubic
+                        }
+                        NumberAnimation {
+                            target: msgDelegate; property: "rimScale"
+                            to: 1.0
+                            duration: 360
+                            easing.type: Easing.OutCubic
+                        }
+                    }
 
                     // Gap from the window edge to the bubble's right wall.
                     // The delivery caption aligns to this too — and so, with
@@ -2477,6 +2763,8 @@ Item {
                             modal: false
                             dim: false
                             closePolicy: Popup.CloseOnEscape
+                            // Menu opens above the bubble; grow from that edge.
+                            transformOrigin: Item.Bottom
 
                             // Showing the full emoji picker rather than the
                             // six classic tapbacks.
@@ -2489,6 +2777,33 @@ Item {
                                     msgArea.openMenu = null
                             }
 
+                            enter: Transition {
+                                ParallelAnimation {
+                                    NumberAnimation {
+                                        property: "opacity"; from: 0; to: 1
+                                        duration: Theme.animFast
+                                    }
+                                    NumberAnimation {
+                                        property: "scale"
+                                        from: Theme.popScale; to: 1
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
+                            }
+                            exit: Transition {
+                                ParallelAnimation {
+                                    NumberAnimation {
+                                        property: "opacity"; to: 0
+                                        duration: Theme.animMicro
+                                    }
+                                    NumberAnimation {
+                                        property: "scale"; to: Theme.popScale
+                                        duration: Theme.animMicro
+                                    }
+                                }
+                            }
+
                             background: Rectangle {
                                 color: Theme.dark ? Qt.rgba(0.17, 0.17, 0.19, 0.98)
                                                   : Qt.rgba(1, 1, 1, 0.98)
@@ -2498,18 +2813,55 @@ Item {
                             }
 
                             contentItem: Column {
+                                id: menuBody
                                 spacing: 2
+                                // Match the widest section (tapback row is
+                                // seven 32px chips + gaps = 236). Action rows
+                                // used a fixed 190, so their hover fill
+                                // stopped short of the menu edge under the
+                                // reactions. Computed, not taken from child
+                                // implicitWidth — binding width to a child
+                                // that also binds to this width cycles.
+                                readonly property int menuWidth:
+                                    bubbleMenu.picking
+                                        ? Math.max(190, 6 * 32)
+                                        : (msgDelegate.guid !== ""
+                                           ? (7 * 32 + 6 * 2) : 190)
+                                width: menuWidth
+                                Behavior on width {
+                                    NumberAnimation {
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
 
                                 // The six classic tapbacks, in a row, the way
                                 // iOS presents them, with a "more" button on
-                                // the end for everything else.
+                                // the end for everything else. Height/opacity
+                                // crossfade with the full picker below so
+                                // classic ↔ more is not a hard swap.
                                 Row {
+                                    id: reactionRow
                                     spacing: 2
                                     // Same rule as the verbs below: a tapback
                                     // names its target by guid, so a message
                                     // without one can't carry a reaction.
-                                    visible: msgDelegate.guid !== ""
-                                             && !bubbleMenu.picking
+                                    readonly property bool shown:
+                                        msgDelegate.guid !== ""
+                                        && !bubbleMenu.picking
+                                    height: shown ? 32 : 0
+                                    opacity: shown ? 1 : 0
+                                    clip: true
+                                    visible: height > 0.5 || opacity > 0.01
+                                    Behavior on height {
+                                        NumberAnimation {
+                                            duration: Theme.animFast
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: Theme.animFast }
+                                    }
                                     Repeater {
                                         model: [
                                             { emoji: "❤️", kind: "Heart" },
@@ -2526,11 +2878,22 @@ Item {
                                             color: tapHover.hovered
                                                    ? Qt.rgba(1, 1, 1, 0.12)
                                                    : "transparent"
+                                            Behavior on color {
+                                                ColorAnimation { duration: Theme.animFast }
+                                            }
 
                                             Text {
                                                 anchors.centerIn: parent
                                                 text: parent.modelData.emoji
                                                 font.pixelSize: 17
+                                                scale: tapHover.hovered
+                                                       ? Theme.hoverScale : 1.0
+                                                Behavior on scale {
+                                                    NumberAnimation {
+                                                        duration: Theme.animFast
+                                                        easing.type: Easing.OutCubic
+                                                    }
+                                                }
                                             }
 
                                             HoverHandler { id: tapHover }
@@ -2561,11 +2924,22 @@ Item {
                                         color: moreHover.hovered
                                                ? Qt.rgba(1, 1, 1, 0.12)
                                                : "transparent"
+                                        Behavior on color {
+                                            ColorAnimation { duration: Theme.animFast }
+                                        }
                                         Text {
                                             anchors.centerIn: parent
                                             text: "＋"
                                             color: Theme.textDim
                                             font.pixelSize: 15
+                                            scale: moreHover.hovered
+                                                   ? Theme.hoverScale : 1.0
+                                            Behavior on scale {
+                                                NumberAnimation {
+                                                    duration: Theme.animFast
+                                                    easing.type: Easing.OutCubic
+                                                }
+                                            }
                                         }
                                         HoverHandler { id: moreHover }
                                         TapHandler {
@@ -2581,8 +2955,26 @@ Item {
                                 Column {
                                     id: emojiPicker
                                     spacing: 4
-                                    visible: msgDelegate.guid !== ""
-                                             && bubbleMenu.picking
+                                    width: menuBody.width
+                                    readonly property bool shown:
+                                        msgDelegate.guid !== ""
+                                        && bubbleMenu.picking
+                                    // implicitHeight is 0 while empty; once
+                                    // shown, measure the full column so the
+                                    // height ease has a real target.
+                                    height: shown ? implicitHeight : 0
+                                    opacity: shown ? 1 : 0
+                                    clip: true
+                                    visible: height > 0.5 || opacity > 0.01
+                                    Behavior on height {
+                                        NumberAnimation {
+                                            duration: Theme.animFast
+                                            easing.type: Easing.OutCubic
+                                        }
+                                    }
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: Theme.animFast }
+                                    }
 
                                     // Whatever `query` matches, or the
                                     // hand-picked openers before it is typed
@@ -2597,8 +2989,8 @@ Item {
                                                   : emoji.popular(24)
                                     }
 
-                                    onVisibleChanged: {
-                                        if (!visible)
+                                    onShownChanged: {
+                                        if (!shown)
                                             return
                                         query.text = ""
                                         refresh()
@@ -2607,7 +2999,7 @@ Item {
 
                                     TextField {
                                         id: query
-                                        width: 190
+                                        width: parent.width
                                         height: 26
                                         placeholderText: "Search emoji"
                                         color: Theme.text
@@ -2634,6 +3026,7 @@ Item {
                                     Grid {
                                         columns: 6
                                         spacing: 0
+                                        width: parent.width
                                         Repeater {
                                             model: emojiPicker.choices
                                             Rectangle {
@@ -2643,10 +3036,21 @@ Item {
                                                 color: pickHover.hovered
                                                        ? Qt.rgba(1, 1, 1, 0.12)
                                                        : "transparent"
+                                                Behavior on color {
+                                                    ColorAnimation { duration: Theme.animFast }
+                                                }
                                                 Text {
                                                     anchors.centerIn: parent
                                                     text: parent.modelData.emoji
                                                     font.pixelSize: 17
+                                                    scale: pickHover.hovered
+                                                           ? Theme.hoverScale : 1.0
+                                                    Behavior on scale {
+                                                        NumberAnimation {
+                                                            duration: Theme.animFast
+                                                            easing.type: Easing.OutCubic
+                                                        }
+                                                    }
                                                 }
                                                 HoverHandler { id: pickHover }
                                                 TapHandler {
@@ -2661,7 +3065,7 @@ Item {
 
                                     Text {
                                         visible: emojiPicker.choices.length === 0
-                                        width: 190
+                                        width: parent.width
                                         text: "No emoji matches “" + query.text + "”"
                                         elide: Text.ElideRight
                                         color: Theme.textDim
@@ -2670,7 +3074,7 @@ Item {
                                 }
 
                                 Rectangle {
-                                    width: parent.width
+                                    width: menuBody.width
                                     height: 1
                                     color: Theme.separator
                                 }
@@ -2716,18 +3120,35 @@ Item {
                                              : msgDelegate.body !== "")
                                             && (!modelData.need
                                                 || msgDelegate.outgoing)
-                                        width: 190
+                                        // Full menu width so the hover fill
+                                        // matches the tapback row above.
+                                        width: menuBody.width
                                         height: visible ? 30 : 0
                                         visible: allowed
                                         radius: 7
                                         color: rowHover.hovered
                                                ? Qt.rgba(1, 1, 1, 0.10)
                                                : "transparent"
+                                        Behavior on color {
+                                            ColorAnimation { duration: Theme.animFast }
+                                        }
 
                                         Text {
                                             anchors.verticalCenter: parent.verticalCenter
                                             anchors.left: parent.left
                                             anchors.leftMargin: 10
+                                            // Slight indent on hover — reads
+                                            // as the row pressing in without
+                                            // scaling the whole menu shell.
+                                            transform: Translate {
+                                                x: rowHover.hovered ? 2 : 0
+                                                Behavior on x {
+                                                    NumberAnimation {
+                                                        duration: Theme.animFast
+                                                        easing.type: Easing.OutCubic
+                                                    }
+                                                }
+                                            }
                                             text: parent.modelData.label
                                             color: Theme.text
                                             font.pixelSize: 12
@@ -2770,12 +3191,46 @@ Item {
                         }
 
                         // ---- media: no bubble, stands on its own --------
+                        // Skeleton holds the reserved footprint while the
+                        // decode finishes; the photo fades in over it. Size
+                        // stays fixed from import metrics so scroll settle
+                        // is not re-fought with a height animation.
+                        Rectangle {
+                            id: mediaSkeleton
+                            anchors {
+                                right: outgoing ? parent.right : undefined
+                                left: outgoing ? undefined : parent.left
+                                rightMargin: msgDelegate.sideMargin
+                                leftMargin: 16 + gutter
+                            }
+                            y: 2
+                            width: mediaItem.width
+                            height: mediaItem.height
+                            radius: isSticker ? 0 : 16
+                            color: Qt.rgba(1, 1, 1, 0.06)
+                            // Photos only — a flat plate under a transparent
+                            // sticker looks like a broken download. Opacity
+                            // (not bare visible) so the plate eases out as
+                            // the decode lands rather than vanishing under
+                            // the fade-in.
+                            readonly property bool waiting:
+                                isImage && image !== ""
+                                && mediaItem.status !== Image.Ready
+                                && mediaItem.status !== Image.Error
+                            opacity: waiting ? 1 : 0
+                            visible: opacity > 0.01
+                            Behavior on opacity {
+                                NumberAnimation { duration: Theme.animFast }
+                            }
+                        }
+
                         Image {
                             id: mediaItem
                             // Hide on empty source or decode failure so the
                             // file-chip bubble below can take over. Loading
                             // still reserves space via width/height below.
-                            visible: showMedia
+                            visible: isMedia && image !== ""
+                                     && status !== Image.Error
                             source: isMedia && image !== "" ? image : ""
                             anchors {
                                 right: outgoing ? parent.right : undefined
@@ -2813,6 +3268,21 @@ Item {
                             // orientation only in metadata, so without this
                             // they display sideways.
                             autoTransform: true
+                            // Fade in once decoded. Historical scroll-in
+                            // uses the cache and often lands Ready on the
+                            // first frame — Behavior then no-ops from 1→1.
+                            opacity: status === Image.Ready ? 1 : 0
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: Theme.animBase
+                                    easing.type: Easing.OutCubic
+                                }
+                            }
+                            // Search/quote highlight pulse (same rim as text
+                            // bubbles). Stickers and photos share it.
+                            scale: msgDelegate.highlight ? msgDelegate.rimScale
+                                                         : 1.0
+                            transformOrigin: Item.Center
 
                             // Photos get rounded corners; stickers stay bare
                             // and keep their transparency.
@@ -2869,6 +3339,12 @@ Item {
                             // translucent over KWin's blur, so any overlap
                             // doubled the alpha and read as a stuck-on piece.
                             color: "transparent"
+                            // Soft pulse when this is the search/quote jump
+                            // target — settles back so the accent rim stays
+                            // as the steady cue.
+                            scale: msgDelegate.highlight ? msgDelegate.rimScale
+                                                         : 1.0
+                            transformOrigin: Item.Center
 
                             Shape {
                                 anchors.fill: parent
@@ -2890,6 +3366,11 @@ Item {
                                                  ? Theme.accent
                                                  : Theme.bubbleRim
                                     strokeWidth: msgDelegate.highlight ? 2 : 1
+                                    // Soften the accent rim on/off so a search
+                                    // jump does not flash a hard 1px→2px cut.
+                                    Behavior on strokeColor {
+                                        ColorAnimation { duration: Theme.animBase }
+                                    }
                                     joinStyle: ShapePath.RoundJoin
                                     capStyle: ShapePath.RoundCap
                                     PathSvg {
@@ -2914,6 +3395,23 @@ Item {
                                 visible: bubble.isFile
                                 anchors.centerIn: parent
                                 spacing: 7
+                                // Slight lift on hover so a tappable file
+                                // chip reads as a control, not flat chrome.
+                                opacity: fileChipHover.hovered ? 1.0 : 0.92
+                                scale: fileChipHover.hovered ? 1.02 : 1.0
+                                Behavior on opacity {
+                                    NumberAnimation { duration: Theme.animFast }
+                                }
+                                Behavior on scale {
+                                    NumberAnimation {
+                                        duration: Theme.animFast
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
+                                HoverHandler {
+                                    id: fileChipHover
+                                    cursorShape: Qt.PointingHandCursor
+                                }
                                 Icon {
                                     name: "paperclip"
                                     size: 14
@@ -3049,9 +3547,40 @@ Item {
                         // painted into a hole measured off the artwork. Every
                         // reaction is an emoji now, so none of them is a
                         // special case.
+                        //
+                        // Live arrivals pop in; historical badges drawn when
+                        // a delegate is first built stay still — `_live` is
+                        // flipped only after children complete, so scrolling
+                        // old reactions into view does not re-animate them.
                         Row {
                             id: reactionBadge
-                            visible: msgDelegate.reactions.length > 0
+                            readonly property int count: msgDelegate.reactions.length
+                            // Stay painted while fading out so a removal is
+                            // not a hard cut.
+                            visible: count > 0 || opacity > 0.01
+                            opacity: count > 0 ? 1 : 0
+                            scale: count > 0 ? 1 : 0.6
+                            transformOrigin: Item.Center
+                            property bool _live: false
+                            Component.onCompleted: {
+                                // After children (including the Repeater's
+                                // Text items) have completed, so their
+                                // onCompleted sees `_live` still false.
+                                Qt.callLater(function () {
+                                    reactionBadge._live = true
+                                })
+                            }
+                            Behavior on opacity {
+                                enabled: reactionBadge._live
+                                NumberAnimation { duration: Theme.animFast }
+                            }
+                            Behavior on scale {
+                                enabled: reactionBadge._live
+                                NumberAnimation {
+                                    duration: Theme.animBase
+                                    easing.type: Easing.OutCubic
+                                }
+                            }
                             // Negative: a message can hold a tapback from
                             // everyone in the thread, and a plain row of them
                             // walks off across the conversation. Overlapped,
@@ -3088,9 +3617,39 @@ Item {
                             Repeater {
                                 model: msgDelegate.reactions
                                 Text {
+                                    id: reactionGlyph
                                     required property string modelData
+                                    required property int index
                                     text: modelData
                                     font.pixelSize: 22
+                                    // New glyphs (live reaction while the
+                                    // bubble is on screen) pop in; glyphs
+                                    // built with the delegate do not.
+                                    opacity: 1
+                                    scale: 1
+                                    transformOrigin: Item.Center
+                                    Component.onCompleted: {
+                                        if (!reactionBadge._live)
+                                            return
+                                        opacity = 0
+                                        scale = 0.6
+                                        reactionAppear.start()
+                                    }
+                                    ParallelAnimation {
+                                        id: reactionAppear
+                                        NumberAnimation {
+                                            target: reactionGlyph
+                                            property: "opacity"; to: 1
+                                            duration: Theme.animBase
+                                        }
+                                        NumberAnimation {
+                                            target: reactionGlyph
+                                            property: "scale"; to: 1
+                                            duration: Theme.animBase
+                                            easing.type: Easing.OutBack
+                                            easing.overshoot: 1.4
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3177,12 +3736,47 @@ Item {
                             spacing: 3
 
                             Text {
+                                id: deliveryLabel
                                 visible: msgDelegate.deliveryState !== ""
                                 text: msgDelegate.deliveryState === "read"
                                       ? "Read" : "Delivered"
-                                color: Theme.textDim
+                                // Read is slightly brighter so the upgrade
+                                // from Delivered is visible without a flash.
+                                color: msgDelegate.deliveryState === "read"
+                                       ? Theme.text : Theme.textDim
                                 font.pixelSize: 10
                                 font.bold: msgDelegate.deliveryState === "read"
+                                Behavior on color {
+                                    ColorAnimation { duration: Theme.animBase }
+                                }
+                                // Soft dip when Delivered → Read (or the
+                                // reverse) so the word change is felt, not
+                                // only swapped. Skip the first paint so
+                                // scrolling history in does not pulse.
+                                property bool _live: false
+                                property string _state: msgDelegate.deliveryState
+                                Component.onCompleted: {
+                                    Qt.callLater(function () {
+                                        deliveryLabel._live = true
+                                    })
+                                }
+                                on_StateChanged: {
+                                    if (!_live || _state === "")
+                                        return
+                                    deliveryPulse.restart()
+                                }
+                                SequentialAnimation {
+                                    id: deliveryPulse
+                                    NumberAnimation {
+                                        target: deliveryLabel; property: "opacity"
+                                        to: 0.35; duration: Theme.animMicro
+                                    }
+                                    NumberAnimation {
+                                        target: deliveryLabel; property: "opacity"
+                                        to: 1.0; duration: Theme.animBase
+                                        easing.type: Easing.OutCubic
+                                    }
+                                }
                             }
 
                             Text {
@@ -3227,9 +3821,66 @@ Item {
 
 
                 // Contact photo + name, centred over the conversation.
+                // openOpacity covers empty↔thread; swapOpacity crossfades
+                // between two open threads. Display fields update only at
+                // the bottom of the dip so the new name never flashes in
+                // before the old one has faded out.
                 Column {
+                    id: peerHeader
                     z: 2
-                    visible: msgArea.hasThread
+                    property real openOpacity: msgArea.hasThread ? 1 : 0
+                    property real swapOpacity: 1
+                    property string displayName: ""
+                    property string displayAvatar: ""
+                    property string displayInitials: ""
+                    opacity: openOpacity * swapOpacity
+                    visible: opacity > 0.01
+                    Behavior on openOpacity {
+                        NumberAnimation {
+                            duration: Theme.animFast
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                    transform: Translate {
+                        y: peerHeader.openOpacity > 0.5 ? 0 : 6
+                        Behavior on y {
+                            NumberAnimation {
+                                duration: Theme.animFast
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
+                    function syncDisplay() {
+                        displayName = threadStore.peerName
+                        displayAvatar = threadStore.peerAvatar
+                        displayInitials = threadStore.peerInitials
+                    }
+                    Component.onCompleted: syncDisplay()
+                    // Only crossfade when already open — first open rides
+                    // openOpacity alone and syncs the label immediately.
+                    property string _key: threadStore.currentKey
+                    on_KeyChanged: {
+                        if (openOpacity > 0.9 && _key !== "")
+                            headerSwap.restart()
+                        else {
+                            headerSwap.stop()
+                            swapOpacity = 1
+                            syncDisplay()
+                        }
+                    }
+                    SequentialAnimation {
+                        id: headerSwap
+                        NumberAnimation {
+                            target: peerHeader; property: "swapOpacity"
+                            to: 0; duration: Theme.animMicro
+                        }
+                        ScriptAction { script: peerHeader.syncDisplay() }
+                        NumberAnimation {
+                            target: peerHeader; property: "swapOpacity"
+                            to: 1; duration: Theme.animFast
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                     anchors {
                         top: parent.top
                         topMargin: 8
@@ -3240,12 +3891,12 @@ Item {
                     Avatar {
                         anchors.horizontalCenter: parent.horizontalCenter
                         size: 36
-                        source: threadStore.peerAvatar
-                        initials: threadStore.peerInitials
+                        source: peerHeader.displayAvatar
+                        initials: peerHeader.displayInitials
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: threadStore.peerName
+                        text: peerHeader.displayName
                         color: Theme.text
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -3256,24 +3907,33 @@ Item {
             // Context banner: what the next Enter will do, when it isn't
             // simply "send a new message". Without this, reply and edit mode
             // are invisible states and the next keystroke is a surprise.
+            // Height opens the strip; content opacity eases so cancel is a
+            // fade rather than a hard clip of the label mid-collapse.
             Rectangle {
+                id: pendingBanner
                 Layout.fillWidth: true
                 Layout.leftMargin: 12
                 Layout.rightMargin: 12
                 Layout.preferredHeight: composer.pendingGuid === "" ? 0 : 28
-                visible: Layout.preferredHeight > 0
+                visible: Layout.preferredHeight > 0.5 || bannerBody.opacity > 0.01
                 radius: 8
                 color: Qt.rgba(1, 1, 1, 0.06)
+                clip: true
 
                 Behavior on Layout.preferredHeight {
                     NumberAnimation { duration: Theme.animFast }
                 }
 
                 Row {
+                    id: bannerBody
                     anchors.fill: parent
                     anchors.leftMargin: 10
                     anchors.rightMargin: 6
                     spacing: 8
+                    opacity: composer.pendingGuid !== "" ? 1 : 0
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.animFast }
+                    }
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
@@ -3300,9 +3960,11 @@ Item {
                     name: "x"
                     size: 12
                     color: Theme.textDim
+                    opacity: bannerBody.opacity
                     MouseArea {
                         anchors.fill: parent
                         anchors.margins: -6
+                        enabled: composer.pendingGuid !== ""
                         cursorShape: Qt.PointingHandCursor
                         onClicked: composer.cancelPending()
                     }
@@ -3314,23 +3976,45 @@ Item {
             Rectangle {
                 id: composer
                 Layout.fillWidth: true
-                Layout.margins: 12
+                // Collapse margins with the field so a closed thread leaves
+                // no residual strip under the message area.
+                Layout.margins: msgArea.hasThread ? 12 : 0
                 // Grows with the text and then stops, so a long message
                 // scrolls inside the pill rather than eating the
                 // conversation. 38 keeps the single-line pill exactly as it
-                // was.
+                // was. Height 0 when no thread so empty-state and open
+                // share one eased shell rather than a hard show/hide.
                 readonly property int maxHeight: 140
                 // Same measurement the field uses, so the pill and its
                 // contents can never disagree about how tall one line is.
-                Layout.preferredHeight: Math.min(
-                    maxHeight, Math.max(38, composeFlick.height + 12))
+                Layout.preferredHeight: msgArea.hasThread
+                    ? Math.min(maxHeight, Math.max(38, composeFlick.height + 12))
+                    : 0
+                opacity: msgArea.hasThread ? 1 : 0
+                // Stay in the tree while fading so the rise is visible.
+                visible: Layout.preferredHeight > 0.5 || opacity > 0.01
+                clip: true
                 Behavior on Layout.preferredHeight {
                     NumberAnimation {
-                        duration: Theme.animFast
+                        duration: Theme.animBase
                         easing.type: Easing.OutCubic
                     }
                 }
-                visible: msgArea.hasThread
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: Theme.animBase
+                        easing.type: Easing.OutCubic
+                    }
+                }
+                transform: Translate {
+                    y: msgArea.hasThread ? 0 : 8
+                    Behavior on y {
+                        NumberAnimation {
+                            duration: Theme.animBase
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                }
 
                 // Non-empty while composing a reply or an edit. `editing`
                 // distinguishes the two, since both hold a guid.
@@ -3385,6 +4069,26 @@ Item {
                     pendingGuid = ""
                     pendingBody = ""
                     editing = false
+                    // Composer-only cue. The outgoing bubble already has its
+                    // own add transition — scaling that too would double up.
+                    sendPulse.restart()
+                }
+                // Brief press-in on send so Enter has tactile feedback even
+                // though there is no send button.
+                SequentialAnimation {
+                    id: sendPulse
+                    NumberAnimation {
+                        target: composer; property: "scale"
+                        to: 0.97
+                        duration: Theme.animMicro
+                        easing.type: Easing.OutCubic
+                    }
+                    NumberAnimation {
+                        target: composer; property: "scale"
+                        to: 1.0
+                        duration: Theme.animFast
+                        easing.type: Easing.OutCubic
+                    }
                 }
                 // Pill while it's one line; once it grows, cap the corner so
                 // it becomes a rounded box rather than a lozenge.
@@ -3393,6 +4097,7 @@ Item {
                 border.width: composeField.activeFocus ? 1.5 : 1
                 border.color: composeField.activeFocus
                               ? Theme.accent : Theme.separator
+                transformOrigin: Item.Center
 
                 Behavior on border.color { ColorAnimation { duration: Theme.animFast } }
 
@@ -3409,10 +4114,15 @@ Item {
                 // The placeholder. A sibling of the field rather than a child
                 // of it, so it takes no part in the text layout at all — it
                 // simply sits where the first line of text will sit, computed
-                // from the same padding the field uses.
+                // from the same padding the field uses. Fades when the first
+                // character lands so typing does not hard-cut the prompt.
                 Text {
                     id: composePlaceholder
-                    visible: composeField.length === 0
+                    opacity: composeField.length === 0 ? 1 : 0
+                    visible: opacity > 0.01
+                    Behavior on opacity {
+                        NumberAnimation { duration: Theme.animFast }
+                    }
                     text: "Message"
                     color: Theme.textDim
                     font: composeField.font
@@ -3615,6 +4325,8 @@ Item {
                     width: 290
                     padding: 5
                     closePolicy: Popup.NoAutoClose
+                    // Grows up from the composer field edge.
+                    transformOrigin: Item.Bottom
 
                     background: Rectangle {
                         color: Theme.dark ? Qt.rgba(0.16, 0.16, 0.18, 0.97)
@@ -3625,8 +4337,30 @@ Item {
                     }
 
                     enter: Transition {
-                        NumberAnimation { property: "opacity"; from: 0; to: 1
-                                          duration: Theme.animFast }
+                        ParallelAnimation {
+                            NumberAnimation {
+                                property: "opacity"; from: 0; to: 1
+                                duration: Theme.animFast
+                            }
+                            NumberAnimation {
+                                property: "scale"
+                                from: Theme.popScale; to: 1
+                                duration: Theme.animFast
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                    }
+                    exit: Transition {
+                        ParallelAnimation {
+                            NumberAnimation {
+                                property: "opacity"; to: 0
+                                duration: Theme.animMicro
+                            }
+                            NumberAnimation {
+                                property: "scale"; to: Theme.popScale
+                                duration: Theme.animMicro
+                            }
+                        }
                     }
 
                     contentItem: Column {
@@ -3643,6 +4377,9 @@ Item {
                                        ? Theme.accent
                                        : (hov.hovered ? Qt.rgba(1, 1, 1, 0.08)
                                                       : "transparent")
+                                Behavior on color {
+                                    ColorAnimation { duration: Theme.animFast }
+                                }
 
                                 HoverHandler {
                                     id: hov
@@ -3661,6 +4398,15 @@ Item {
                                         text: modelData.emoji
                                         font.pixelSize: 15
                                         anchors.verticalCenter: parent.verticalCenter
+                                        scale: (index === composeField.highlighted
+                                                || hov.hovered)
+                                               ? Theme.hoverScale : 1.0
+                                        Behavior on scale {
+                                            NumberAnimation {
+                                                duration: Theme.animFast
+                                                easing.type: Easing.OutCubic
+                                            }
+                                        }
                                     }
                                     Text {
                                         text: ":" + modelData.code
@@ -3668,6 +4414,9 @@ Item {
                                                ? "white" : Theme.textDim
                                         font.pixelSize: 12
                                         anchors.verticalCenter: parent.verticalCenter
+                                        Behavior on color {
+                                            ColorAnimation { duration: Theme.animFast }
+                                        }
                                     }
                                 }
 
