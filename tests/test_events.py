@@ -118,17 +118,25 @@ class TestSmsSentEvent:
         # A sent event carries the recipient in sender_* so it threads with
         # incoming messages from the same person.
         e = sms_sent_event("+15551234567", "on my way",
-                           contact_name="Maddie",
+                           contact_name="Robin",
                            transfer_path="/org/bluez/obex/client/session0/transfer3")
         assert e.kind == "sms_sent"
         assert e.sender_phone == "+15551234567"
         assert e.sender_phone_norm == "15551234567"
-        assert e.contact_name == "Maddie"
+        assert e.contact_name == "Robin"
         assert e.body == "on my way"
         assert e.is_read is True
-        assert e.handle == "transfer3"
+        assert e.handle.startswith("transfer3-")
         assert e.timestamp is not None
-        assert e.display_sender == "Maddie"
+        assert e.display_sender == "Robin"
+
+    def test_handles_are_unique_across_sessions(self):
+        """obexd restarts its transfer counter at zero, so the bare path tail
+        collides across sessions and a colliding handle drops a real message."""
+        path = "/org/bluez/obex/client/session0/transfer3"
+        first = sms_sent_event("+15551234567", "one", transfer_path=path)
+        second = sms_sent_event("+15551234567", "two", transfer_path=path)
+        assert first.handle != second.handle
 
     def test_handle_synthesized_without_transfer_path(self):
         e = sms_sent_event("+15551234567", "hi")

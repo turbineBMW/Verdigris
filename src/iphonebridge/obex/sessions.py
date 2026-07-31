@@ -81,13 +81,46 @@ class SessionManager:
         self.pbap: ObexSession | None = None
 
     def open_all(self) -> None:
-        # Restart obexd once at start to give us a known-clean baseline.
-        # Idempotent — even if obexd was fine, this just re-creates it.
-        _restart_obexd()
+        # Don't eagerly restart obexd here — obex.service is shared across
+        # every process on the session bus (daemon + any CLI command), so
+        # restarting it unconditionally tears down sessions other processes
+        # already have open (e.g. the daemon's live MAP listener, killed by
+        # a concurrent `contacts-sync`). _create_session() already restarts
+        # and retries once, but only if CreateSession actually comes back
+        # Forbidden — that's the only case that needs a clean baseline.
         self.map = _create_session("MAP")
         log.info("MAP session: %s", self.map.path)
         self.pbap = _create_session("PBAP")
         log.info("PBAP session: %s", self.pbap.path)
+
+    def is_alive(self) -> bool:
+        """Is the MAP session still real, as far as obexd is concerned?
+
+        `self.map is not None` only says we once created a session — the
+        Python object long outlives the session obexd tears down when the
+        phone disconnects, which made the daemon report itself healthy with
+        no link at all. Ask obexd instead.
+        """
+        if self.map is None:
+            return False
+        try:
+            self.map.properties.GetAll("org.bluez.obex.Session1")
+            return True
+        except dbus.exceptions.DBusException:
+            return False
+
+    def reopen(self) -> bool:
+        """Tear down whatever is left and open fresh sessions."""
+        try:
+            self.close_all()
+        except Exception:
+            log.debug("close_all during reopen failed", exc_info=True)
+        try:
+            self.open_all()
+            return True
+        except SessionError as e:
+            log.warning("session reopen failed: %s", e)
+            return False
 
     def close_all(self) -> None:
         client = _client()

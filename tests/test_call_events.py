@@ -37,24 +37,24 @@ class TestCallEventFromOfono:
     def test_incoming_with_caller_id(self):
         e = call_event_from_ofono(
             "/hfp/org/bluez/hci0/dev_14_1B_A0_D6_E6_1D/voicecall01",
-            {"State": "incoming", "LineIdentification": "+14076171189",
+            {"State": "incoming", "LineIdentification": "+14075550105",
              "Name": ""},
             direction="incoming",
         )
         assert e.kind == "call_incoming"
         assert e.direction == "incoming"
         assert e.state == "incoming"
-        assert e.peer_phone == "+14076171189"
-        assert e.peer_phone_norm == "14076171189"
-        assert e.display_peer == "+14076171189"
+        assert e.peer_phone == "+14075550105"
+        assert e.peer_phone_norm == "14075550105"
+        assert e.display_peer == "+14075550105"
 
     def test_contact_name_wins_for_display(self):
         e = call_event_from_ofono(
-            "/c", {"State": "incoming", "LineIdentification": "+14076171189"},
-            direction="incoming", contact_name="Gabe",
+            "/c", {"State": "incoming", "LineIdentification": "+14075550105"},
+            direction="incoming", contact_name="Alex",
         )
-        assert e.contact_name == "Gabe"
-        assert e.display_peer == "Gabe"
+        assert e.contact_name == "Alex"
+        assert e.display_peer == "Alex"
 
     def test_withheld_caller_id(self):
         e = call_event_from_ofono(
@@ -93,17 +93,17 @@ class TestCallEventFromOfono:
     def test_to_dict_is_json_serializable(self):
         e = call_event_from_ofono(
             "/hfp/.../voicecall01",
-            {"State": "active", "LineIdentification": "+14076171189",
+            {"State": "active", "LineIdentification": "+14075550105",
              "Name": ""},
-            direction="outgoing", contact_name="Gabe",
+            direction="outgoing", contact_name="Alex",
         )
         d = e.to_dict()
         parsed = json.loads(json.dumps(d))
         assert parsed["kind"] == "call_active"
         assert parsed["direction"] == "outgoing"
-        assert parsed["contact_name"] == "Gabe"
+        assert parsed["contact_name"] == "Alex"
         assert parsed["call_path"] == "/hfp/.../voicecall01"
-        assert parsed["peer_phone_norm"] == "14076171189"
+        assert parsed["peer_phone_norm"] == "14075550105"
 
 
 class TestCallEventDisplay:

@@ -32,6 +32,46 @@ from iphonebridge.bus import bluez, system_bus
 log = logging.getLogger(__name__)
 
 
+# ---- device link --------------------------------------------------------
+
+def _device_path() -> str:
+    """BlueZ object path for the paired iPhone."""
+    return (f"/org/bluez/hci0/dev_"
+            f"{config.IPHONE_MAC.replace(':', '_').upper()}")
+
+
+def device_connected() -> bool:
+    """Is the iPhone currently connected over Bluetooth?"""
+    try:
+        props = dbus.Interface(
+            system_bus.get_object("org.bluez", _device_path()),
+            "org.freedesktop.DBus.Properties")
+        return bool(props.Get("org.bluez.Device1", "Connected"))
+    except dbus.exceptions.DBusException:
+        return False
+
+
+def connect_device(timeout: float = 20.0) -> bool:
+    """Ask BlueZ to reconnect the iPhone.
+
+    iOS re-connects on its own most of the time, but not always — after a
+    long absence it can sit there paired-but-idle indefinitely, which looks
+    exactly like "messages stopped working".
+    """
+    if device_connected():
+        return True
+    try:
+        dev = dbus.Interface(
+            system_bus.get_object("org.bluez", _device_path()),
+            "org.bluez.Device1")
+        dev.Connect(timeout=timeout)
+        log.info("reconnected to iPhone")
+        return True
+    except dbus.exceptions.DBusException as e:
+        log.debug("Device1.Connect failed: %s", e.get_dbus_name())
+        return False
+
+
 # ---- Class-of-Device ----------------------------------------------------
 
 def current_cod() -> int | None:

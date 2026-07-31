@@ -17,7 +17,7 @@ def test_single_vcard():
         """)
     cards = _parse_vcards(blob)
     assert len(cards) == 1
-    name, phones = cards[0]
+    name, _nickname, phones, _photo = cards[0]
     assert name == "John Smith"
     assert phones == ["15551234567"]
 
@@ -51,7 +51,7 @@ def test_multiple_phones_per_card():
         """)
     cards = _parse_vcards(blob)
     assert len(cards) == 1
-    name, phones = cards[0]
+    name, _nickname, phones, _photo = cards[0]
     assert name == "Multi"
     assert sorted(phones) == ["15551111111", "15552222222", "15553333333"]
 
@@ -64,7 +64,7 @@ def test_card_with_no_phone():
         """)
     cards = _parse_vcards(blob)
     assert len(cards) == 1
-    name, phones = cards[0]
+    name, _nickname, phones, _photo = cards[0]
     assert name == "Name Only"
     assert phones == []
 
@@ -77,9 +77,37 @@ def test_card_with_no_name():
         """)
     cards = _parse_vcards(blob)
     assert len(cards) == 1
-    name, phones = cards[0]
+    name, _nickname, phones, _photo = cards[0]
     assert name is None
     assert phones == ["15551234567"]
+
+
+def test_nickname_preferred_form_is_parsed():
+    """A nickname is the display name iOS itself uses, so it must survive."""
+    blob = textwrap.dedent("""\
+        BEGIN:VCARD
+        FN:Christopher Smith
+        NICKNAME;CHARSET=UTF-8:Chris,Topher
+        TEL:+15551234567
+        END:VCARD
+        """)
+    name, nickname, phones, _photo = _parse_vcards(blob)[0]
+    assert name == "Christopher Smith"
+    # vCard allows a list; only the first is used.
+    assert nickname == "Chris"
+    assert phones == ["15551234567"]
+
+
+def test_photo_is_base64_decoded():
+    blob = textwrap.dedent("""\
+        BEGIN:VCARD
+        FN:Pic
+        PHOTO;ENCODING=BASE64;TYPE=JPEG:aGVsbG8=
+        TEL:+15551234567
+        END:VCARD
+        """)
+    _name, _nickname, _phones, photo = _parse_vcards(blob)[0]
+    assert photo == b"hello"
 
 
 def test_empty_blob():

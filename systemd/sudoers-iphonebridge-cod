@@ -7,4 +7,4 @@
 #   sudo bash systemd/install-cod-sudoers.sh
 # (sudo visudo-checks the file before copying it into /etc/sudoers.d/)
 
-gabrielmeir53 ALL=(root) NOPASSWD: /usr/bin/btmgmt class 4 8
+bash ALL=(root) NOPASSWD: /usr/bin/btmgmt class 4 8

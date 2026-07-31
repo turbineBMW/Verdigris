@@ -6,6 +6,8 @@ not `SetFolder`. Then `PullAll(targetfile, filters)`.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import re
 import sqlite3
@@ -30,27 +32,66 @@ _VCARD_BLOCK = re.compile(
     r"BEGIN:VCARD(?P<body>.*?)END:VCARD", re.DOTALL | re.IGNORECASE
 )
 
-def _parse_vcards(blob: str) -> list[tuple[str | None, list[str]]]:
-    """Return [(full_name, [phone_norm, ...]), ...]."""
-    out: list[tuple[str | None, list[str]]] = []
+
+def _unfold(body: str) -> list[str]:
+    """RFC 6350 line unfolding: a line starting with a space or tab is a
+    continuation of the previous logical line (vCard PHOTO payloads are
+    almost always folded this way)."""
+    lines: list[str] = []
+    for raw in body.splitlines():
+        if raw[:1] in (" ", "\t") and lines:
+            lines[-1] += raw[1:]
+        else:
+            lines.append(raw)
+    return lines
+
+
+def _parse_vcards(
+    blob: str,
+) -> list[tuple[str | None, str | None, list[str], bytes | None]]:
+    """Return [(full_name, nickname, [phone_norm, ...], photo_bytes), ...].
+
+    A nickname is what you'd actually call someone, so when the contact has
+    one it's the better display name — same as Messages on iOS.
+    """
+    out: list[tuple[str | None, str | None, list[str], bytes | None]] = []
     for m in _VCARD_BLOCK.finditer(blob):
-        body = m.group("body")
         fn: str | None = None
+        nickname: str | None = None
         phones: list[str] = []
-        for line in body.splitlines():
+        photo_b64: str | None = None
+        for line in _unfold(m.group("body")):
             line = line.strip()
             if not line:
                 continue
-            if line.upper().startswith("FN:"):
+            upper = line.upper()
+            if upper.startswith("FN:"):
                 fn = line[3:].strip() or None
-            elif line.upper().startswith("TEL"):
+            elif upper.startswith("NICKNAME"):
+                # NICKNAME:Chris  /  NICKNAME;CHARSET=UTF-8:Chris
+                _, _, val = line.partition(":")
+                # vCard allows a comma-separated list; take the first.
+                nickname = val.split(",")[0].strip() or None
+            elif upper.startswith("TEL"):
                 # forms: TEL:1234, TEL;TYPE=CELL:1234, TEL;TYPE=CELL,VOICE:1234
                 _, _, val = line.partition(":")
                 norm = normalize_phone(val)
                 if norm:
                     phones.append(norm)
+            elif upper.startswith("PHOTO"):
+                # forms: PHOTO;ENCODING=b;TYPE=JPEG:<base64>,
+                #        PHOTO;ENCODING=BASE64;TYPE=JPEG:<base64>
+                params, _, val = line.partition(":")
+                if "B" in params.upper():  # ENCODING=b / BASE64
+                    photo_b64 = val.strip()
+        photo: bytes | None = None
+        if photo_b64:
+            try:
+                photo = base64.b64decode(photo_b64, validate=False)
+            except (binascii.Error, ValueError):
+                photo = None
         if fn or phones:
-            out.append((fn, phones))
+            out.append((fn, nickname, phones, photo))
     return out
 
 
@@ -60,6 +101,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS contacts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     full_name    TEXT NOT NULL,
+    nickname     TEXT,
+    photo_path   TEXT,
     updated_at   REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS phones (
@@ -80,6 +123,12 @@ def _open_db() -> sqlite3.Connection:
     config.ensure_dirs()
     conn = sqlite3.connect(config.CONTACTS_DB)
     conn.executescript(_SCHEMA)
+    # Migrate DBs created before these columns existed.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(contacts)")}
+    for col, ddl in (("photo_path", "TEXT"), ("nickname", "TEXT")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE contacts ADD COLUMN {col} {ddl}")
+            conn.commit()
     return conn
 
 
@@ -96,10 +145,17 @@ def pull_phonebook(sessions: SessionManager, *, max_contacts: int = 65535) -> in
 
     out = Path(tempfile.mkdtemp(prefix="iphonebridge_pb_")) / "pb.vcf"
     log.info("PBAP PullAll → %s (max=%d)", out, max_contacts)
+    # Ask for NICKNAME explicitly. Without a Fields filter the iPhone
+    # returns only its default subset (name/phone/photo), so nicknames were
+    # never in the vCards to begin with — the parser had nothing to find.
+    fields = dbus.Array(
+        ["VERSION", "FN", "N", "NICKNAME", "TEL", "EMAIL", "PHOTO"],
+        signature="s")
     ret = pbap.PullAll(
         str(out),
         {"MaxListCount": dbus.UInt16(max_contacts),
-         "Format": dbus.String("Vcard30")},
+         "Format": dbus.String("Vcard30"),
+         "Fields": fields},
     )
     transfer_path = str(ret[0]) if isinstance(ret, (tuple, list)) else str(ret)
 
@@ -122,21 +178,49 @@ def pull_phonebook(sessions: SessionManager, *, max_contacts: int = 65535) -> in
 
     blob = out.read_text(errors="replace")
     parsed = _parse_vcards(blob)
-    log.info("parsed %d contacts from %d bytes", len(parsed), out.stat().st_size)
+    photo_count = sum(1 for _fn, _nick, _ph, photo in parsed if photo)
+    nick_count = sum(1 for _fn, nick, _ph, _p in parsed if nick)
+    log.info("parsed %d contacts (%d with photos, %d with nicknames) "
+             "from %d bytes",
+             len(parsed), photo_count, nick_count, out.stat().st_size)
+
+    # Full resync — old photo files are keyed by contact id, which never
+    # gets reused (AUTOINCREMENT), so clear the directory first or they'd
+    # just accumulate as orphans forever.
+    config.ensure_dirs()
+    for stale in config.PHOTOS_DIR.glob("*.jpg"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
     now = time.time()
     with closing(_open_db()) as db:
         with db:  # transaction
             db.execute("DELETE FROM contacts")
             db.execute("DELETE FROM phones")
-            for fn, phones in parsed:
+            for fn, nickname, phones, photo in parsed:
                 if not fn and not phones:
                     continue
                 cur = db.execute(
-                    "INSERT INTO contacts(full_name, updated_at) VALUES (?, ?)",
-                    (fn or "", now),
+                    "INSERT INTO contacts(full_name, nickname, updated_at) "
+                    "VALUES (?, ?, ?)",
+                    (fn or "", nickname, now),
                 )
                 cid = cur.lastrowid
+                photo_path = None
+                if photo:
+                    photo_path = str(config.PHOTOS_DIR / f"{cid}.jpg")
+                    try:
+                        Path(photo_path).write_bytes(photo)
+                    except OSError:
+                        log.warning("failed to write photo for contact %d", cid)
+                        photo_path = None
+                if photo_path:
+                    db.execute(
+                        "UPDATE contacts SET photo_path = ? WHERE id = ?",
+                        (photo_path, cid),
+                    )
                 for p in phones:
                     db.execute(
                         "INSERT OR IGNORE INTO phones(phone_norm, contact_id) "
@@ -171,23 +255,31 @@ class ContactsResolver:
 
     def __init__(self) -> None:
         self._mem: dict[str, str] = {}
+        self._photos: dict[str, str] = {}
         self._warm()
 
     def _warm(self) -> None:
         try:
             with closing(_open_db()) as db:
-                for phone, name in db.execute(
-                    "SELECT p.phone_norm, c.full_name "
+                for phone, name, photo_path in db.execute(
+                    # A nickname wins over the formal name when one is set,
+                    # which is what Messages shows on the phone.
+                    "SELECT p.phone_norm, "
+                    "       COALESCE(NULLIF(TRIM(c.nickname), ''), c.full_name), "
+                    "       c.photo_path "
                     "FROM phones p JOIN contacts c ON c.id = p.contact_id "
-                    "WHERE c.full_name != ''"
+                    "WHERE c.full_name != '' OR TRIM(COALESCE(c.nickname,'')) != ''"
                 ):
                     self._mem[phone] = name
+                    if photo_path:
+                        self._photos[phone] = photo_path
         except sqlite3.Error as e:
             log.warning("contacts cache warm failed: %s", e)
 
     def refresh(self) -> int:
         """Re-read the SQLite cache into memory. Returns new count."""
         self._mem.clear()
+        self._photos.clear()
         self._warm()
         return len(self._mem)
 
@@ -222,22 +314,33 @@ class ContactsResolver:
             return []
         return list(seen)
 
-    def resolve(self, raw: str | None) -> str | None:
-        norm = normalize_phone(raw)
-        if not norm:
-            return None
+    @staticmethod
+    def _lookup(mapping: dict[str, str], norm: str) -> str | None:
         # Match exact, or suffix-match (US numbers might be stored 10 vs 11 digit
         # depending on whether the country code +1 was included). Match in BOTH
         # directions: a 10-digit incoming might match an 11-digit stored, and
         # vice versa.
-        if norm in self._mem:
-            return self._mem[norm]
+        if norm in mapping:
+            return mapping[norm]
         if len(norm) >= 10:
             tail = norm[-10:]
-            for k, v in self._mem.items():
+            for k, v in mapping.items():
                 if k.endswith(tail):
                     return v
         return None
+
+    def resolve(self, raw: str | None) -> str | None:
+        norm = normalize_phone(raw)
+        if not norm:
+            return None
+        return self._lookup(self._mem, norm)
+
+    def resolve_photo(self, raw: str | None) -> str | None:
+        """Path to a contact's cached PBAP photo, or None if it has none."""
+        norm = normalize_phone(raw)
+        if not norm:
+            return None
+        return self._lookup(self._photos, norm)
 
     def count(self) -> int:
         return len(self._mem)

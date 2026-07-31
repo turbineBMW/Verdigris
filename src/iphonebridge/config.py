@@ -63,6 +63,39 @@ we're not actually consuming ANCS in Phase 1."""
 
 BLE_ADVERT_LOCAL_NAME: str = "pop-os-ibridge"
 
+# ---- privacy ------------------------------------------------------------
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+SEND_READ_RECEIPTS: bool = _env_bool("IPHONEBRIDGE_SEND_READ_RECEIPTS", True)
+"""Master switch for telling senders we've read their messages.
+
+Read receipts are bidirectional: the same channel that reports *their* read
+state reports ours back to them. The policy here is narrower than iOS's
+all-or-nothing toggle — **a receipt goes out only when you send something
+into the thread**, never merely because you looked at it:
+
+  * Opening or scrolling a conversation discloses nothing.
+  * Replying, reacting, or sending discloses that you read it — which
+    replying already does anyway, so the receipt adds no information.
+
+That makes the disclosure a consequence of an action you deliberately took,
+which is why this defaults on. Set the env var false to suppress even that.
+
+Note there are two unrelated 'mark read' operations in this codebase, and
+only one of them is governed by this flag:
+
+  * `ThreadStore._mark_read` (qtui/models.py) is local bookkeeping — it
+    clears the unread badge and nothing else. Always runs.
+  * `Messages1.MarkRead` (dbus_service.py) sends a receipt over iMessage.
+    Only reached via a successful send; see `_read_receipt_on_send`.
+"""
+
 # ---- runtime paths ------------------------------------------------------
 
 _state_home = Path(
@@ -72,9 +105,11 @@ _state_home = Path(
 STATE_DIR: Path = _state_home
 EVENTS_JSONL: Path = _state_home / "events.jsonl"
 CONTACTS_DB: Path = _state_home / "contacts.sqlite"
+PHOTOS_DIR: Path = _state_home / "contact_photos"
 
 def ensure_dirs() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- dbus paths used in the daemon --------------------------------------
 

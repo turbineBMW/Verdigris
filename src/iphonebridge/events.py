@@ -18,8 +18,8 @@ _PHONE_KEEP = re.compile(r"\D")
 def normalize_phone(raw: str | None) -> str | None:
     """Reduce a phone string to digits only (E.164-ish minus the +).
 
-    "+1 (561) 235-1044" → "15551234567"
-    "5612351044"        → "5612351044"
+    "+1 (561) 555-0106" → "15615550106"
+    "5615550106"        → "5615550106"
     "Mom"               → None  (looked like a name)
     """
     if not raw:
@@ -41,6 +41,53 @@ def parse_map_timestamp(ts: str | None) -> datetime | None:
         return None
     # MAP timestamps are local-time on the iPhone; we'll treat as local
     return dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+
+
+# ---- reaction (tapback) detection ----------------------------------------
+#
+# Bluetooth MAP has no structured concept of an iMessage tapback — iOS just
+# synthesizes a plain-text notification body for it ('Loved "hey there"').
+# We can only detect these by pattern-matching that phrasing; there's no
+# reliable link back to which prior message it targets beyond the quoted
+# snippet iOS includes, and no way to *send* a real tapback over MAP at all
+# (PushMessage only supports fresh plain-text messages).
+
+_REACTION_VERBS = (
+    "Loved", "Liked", "Disliked", "Laughed at", "Emphasized", "Questioned",
+    "Removed a heart from", "Removed a like from", "Removed a dislike from",
+    "Removed a laugh from", "Removed an exclamation from",
+    "Removed a question mark from",
+)
+_REACTION_RE = re.compile(
+    r"^(?P<verb>" + "|".join(_REACTION_VERBS) + r") [“\"](?P<snippet>.*)[”\"]$",
+    re.DOTALL,
+)
+
+
+# iOS 18+ also allows an arbitrary emoji as a tapback, which arrives as
+# 'Reacted 😀 to "…"' rather than one of the six fixed verbs above.
+_REACTION_EMOJI_RE = re.compile(
+    r"^Reacted (?P<emoji>.+?) to [“\"](?P<snippet>.*)[”\"]$",
+    re.DOTALL,
+)
+
+
+def _detect_reaction(body: str | None) -> tuple[str | None, str | None]:
+    """Return (verb, quoted snippet), or (None, None) if not a tapback.
+
+    For an emoji tapback the verb is "Reacted <emoji>"; callers split on the
+    prefix to get the emoji, since there's no fixed icon for those.
+    """
+    if not body:
+        return None, None
+    body = body.strip()
+    m = _REACTION_RE.match(body)
+    if m:
+        return m.group("verb"), m.group("snippet")
+    m = _REACTION_EMOJI_RE.match(body)
+    if m:
+        return f"Reacted {m.group('emoji')}", m.group("snippet")
+    return None, None
 
 
 # ---- event types --------------------------------------------------------
@@ -65,9 +112,35 @@ class SmsEvent:
     # Full BlueZ obex DBus path to the Message1 object, so downstream
     # code (e.g. libnotify sink) can write back read-state.
     message_path: str | None = None
+    # Group-chat identity. Set only by transports that actually know it —
+    # iMessage does, MAP does not. Threading keys on this when present, so a
+    # group message files under the conversation rather than scattering into
+    # each participant's 1:1 thread.
+    #
+    # Part of the event rather than the iMessage-only extras because it
+    # reaches disk: history reloaded from events.jsonl has to thread the same
+    # way it did live.
+    chat_guid: str | None = None
+    chat_name: str | None = None
+    # iMessage's own per-message id. Every action the UI offers (tapback,
+    # reply, edit, unsend) names its target by this, and delivery receipts
+    # arrive keyed to it — so it has to persist to disk, or a message stops
+    # being actionable the moment the app restarts and reloads from history.
+    guid: str | None = None
+    # The message this one replies to. Here rather than in the iMessage-only
+    # extras for the same reason as chat_guid: it reaches disk, and a reply
+    # reloaded from history has to still read as a reply instead of turning
+    # back into an ordinary message on the next restart.
+    reply_to_guid: str | None = None
     seen_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    # Derived, not passed by callers — see _detect_reaction() above.
+    reaction_verb: str | None = field(default=None, init=False)
+    reaction_snippet: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        self.reaction_verb, self.reaction_snippet = _detect_reaction(self.body)
 
     @property
     def display_sender(self) -> str:
@@ -87,7 +160,13 @@ class SmsEvent:
             "is_read": self.is_read,
             "raw_status": self.raw_status,
             "raw_type": self.raw_type,
+            "chat_guid": self.chat_guid,
+            "chat_name": self.chat_name,
+            "guid": self.guid,
+            "reply_to_guid": self.reply_to_guid,
             "seen_at": self.seen_at.isoformat(),
+            "reaction_verb": self.reaction_verb,
+            "reaction_snippet": self.reaction_snippet,
         }
 
 
@@ -97,6 +176,8 @@ def sms_sent_event(
     *,
     contact_name: str | None = None,
     transfer_path: str = "",
+    guid: str | None = None,
+    reply_to_guid: str | None = None,
 ) -> SmsEvent:
     """Build an SmsEvent for a message *we* just sent via MAP PushMessage.
 
@@ -104,8 +185,14 @@ def sms_sent_event(
     `sender_*` / `contact_name` fields carry the recipient — that keeps it
     in the same conversation thread as incoming messages from that person.
     """
-    handle = (transfer_path.rsplit("/", 1)[-1] if transfer_path
-              else f"sent-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}")
+    # The transfer path tail alone ("transfer3") is NOT unique: obexd numbers
+    # transfers per session starting at zero, so the counter resets every time
+    # a session is recreated and handles collide across restarts. Consumers
+    # dedupe by handle, so a colliding handle makes a real message vanish.
+    # Stamp it to keep handles unique for the lifetime of the log.
+    stamp = f"{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
+    tail = transfer_path.rsplit("/", 1)[-1] if transfer_path else "sent"
+    handle = f"{tail}-{stamp}"
     return SmsEvent(
         kind="sms_sent",
         handle=handle,
@@ -115,6 +202,8 @@ def sms_sent_event(
         body=body,
         timestamp=datetime.now().astimezone(),
         is_read=True,
+        guid=guid,
+        reply_to_guid=reply_to_guid,
         raw_status="sent",
         raw_type="sms_sent",
         message_path=None,

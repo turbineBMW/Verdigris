@@ -94,7 +94,30 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
 def contacts_sync(verbose: bool = typer.Option(False, "-v", "--verbose")):
     """Force a fresh PBAP pull from the iPhone (rebuilds the contacts cache)."""
     _setup_logging(verbose)
-    # Heavyweight — needs sessions
+
+    # Prefer the running daemon: the iPhone allows only one OBEX session at
+    # a time, so opening our own here fails with "Connection refused"
+    # whenever the daemon already holds one.
+    import dbus
+    import dbus.exceptions
+    try:
+        svc = dbus.Interface(
+            dbus.SessionBus().get_object("com.gabriel.iphonebridge",
+                                         "/com/gabriel/iphonebridge"),
+            "com.gabriel.iphonebridge.Messages1")
+        n = int(svc.RefreshContacts(timeout=180))
+        typer.echo(f"Pulled contacts via the daemon — {n} cached in "
+                   f"{config.CONTACTS_DB}")
+        return
+    except dbus.exceptions.DBusException as e:
+        name = e.get_dbus_name() or ""
+        if "ServiceUnknown" not in name and "NoReply" not in name:
+            typer.echo(typer.style(
+                f"Daemon refresh failed: {e.get_dbus_message() or e}",
+                fg=typer.colors.RED))
+            raise typer.Exit(1)
+        typer.echo("Daemon not running — opening a direct session instead.")
+
     from iphonebridge.contacts import pull_phonebook
     from iphonebridge.obex.sessions import SessionManager
     sm = SessionManager()
@@ -633,6 +656,119 @@ def hfp_enable(verbose: bool = typer.Option(False, "-v", "--verbose")):
     typer.echo("")
     typer.echo("Then restart the daemon:  "
                "systemctl --user restart iphonebridge")
+
+
+@app.command("backup-wifi")
+def backup_wifi(
+    off: bool = typer.Option(False, "--off", help="Turn Wi-Fi sync back off."),
+):
+    """Allow backups over Wi-Fi, so the cable is only needed once.
+
+    Flips iOS's `EnableWiFiConnections` — the same switch as Finder's "Sync
+    over Wi-Fi". The phone must be plugged in for this one command; after
+    that it can be backed up wirelessly whenever it's on the same network.
+    """
+    import subprocess
+
+    from iphonebridge.backup.runner import device_info
+
+    if device_info() is None:
+        typer.echo(typer.style(
+            "Connect the iPhone by USB for this one step.",
+            fg=typer.colors.RED))
+        raise typer.Exit(1)
+
+    state = "off" if off else "on"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pymobiledevice3", "lockdown",
+         "wifi-connections", "--state", state],
+        capture_output=True, text=True)
+    if proc.returncode != 0:
+        typer.echo(typer.style(
+            f"Could not set Wi-Fi sync: {(proc.stderr or proc.stdout).strip()}",
+            fg=typer.colors.RED))
+        raise typer.Exit(1)
+    typer.echo(typer.style(f"Wi-Fi sync {state}.", fg=typer.colors.GREEN))
+    if not off:
+        typer.echo("You can unplug now — backups will find the phone over "
+                   "the network when it's unlocked and on Wi-Fi.")
+
+
+@app.command("backup-sync")
+def backup_sync(
+    skip_backup: bool = typer.Option(
+        False, "--skip-backup",
+        help="Use the existing backup instead of taking a fresh one."),
+    limit: int = typer.Option(
+        0, "--limit", help="Only import the newest N messages (0 = all)."),
+    if_available: bool = typer.Option(
+        False, "--if-available",
+        help="Exit quietly when the phone isn't reachable (for timers)."),
+    udid: str = typer.Option(
+        "", "--udid",
+        help="Sync this device instead of the one the history came from."),
+):
+    """Pull messages + attachments from a USB backup of the iPhone.
+
+    Bluetooth MAP can't carry attachments, messages you sent from the phone,
+    or reply threading. A local backup has all of it. Needs the iPhone
+    connected by USB and trusted — no Mac involved.
+    """
+    from iphonebridge.backup.runner import (
+        BackupError,
+        device_info,
+        is_paired,
+        pair,
+    )
+    from iphonebridge.backup.sync import sync
+
+    # --skip-backup reads a backup that's already on disk, so it needs no
+    # device at all. Only require one when we're actually going to talk to
+    # the phone.
+    if not skip_backup:
+        info = device_info(udid or None)
+        if info is None:
+            if if_available:
+                # Scheduled run and the phone isn't around — that's normal,
+                # not a failure. Say so quietly and leave the unit green.
+                typer.echo("iPhone not reachable — skipping this run.")
+                raise typer.Exit(0)
+            typer.echo(typer.style(
+                "No iOS device found over USB.", fg=typer.colors.RED))
+            typer.echo("  • Connect the iPhone with a cable")
+            typer.echo("  • Unlock it and tap Trust, then enter your passcode")
+            typer.echo("  • Or pass --skip-backup to import the last backup")
+            raise typer.Exit(1)
+
+        typer.echo(f"Device: {info.name or '?'} (iOS {info.version or '?'})")
+
+        if not is_paired(info.udid):
+            typer.echo("Not paired yet — tap Trust on the iPhone…")
+            ok, msg = pair(info.udid)
+            if not ok:
+                typer.echo(typer.style(f"Pairing failed: {msg}",
+                                       fg=typer.colors.RED))
+                raise typer.Exit(1)
+            typer.echo("Paired.")
+    else:
+        typer.echo("Using the existing backup on disk (no device needed).")
+
+    try:
+        events = sync(run_new_backup=not skip_backup,
+                      limit=limit or None,
+                      udid=udid or None,
+                      progress=lambda line: typer.echo(f"  {line}")
+                      if "Sending" not in line else None)
+    except BackupError as e:
+        typer.echo(typer.style(str(e), fg=typer.colors.RED))
+        raise typer.Exit(1)
+
+    sent = sum(1 for e in events if e["kind"] == "sms_sent")
+    atts = sum(len(e["attachments"]) for e in events)
+    typer.echo(typer.style(
+        f"\n{len(events)} messages  ({sent} sent from the phone, "
+        f"{atts} attachments extracted)", fg=typer.colors.GREEN))
+    typer.echo("Open the app to see them — restart it if it's already running.")
 
 
 @app.command()

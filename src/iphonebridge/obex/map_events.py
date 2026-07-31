@@ -22,6 +22,7 @@ from pathlib import Path
 
 import dbus
 
+from iphonebridge import config
 from iphonebridge.bus import obex, session_bus
 from iphonebridge.events import SmsEvent, normalize_phone, parse_map_timestamp
 from iphonebridge.obex.bmessage import parse as parse_bmessage
@@ -95,7 +96,11 @@ class MapEventListener:
         target = Path(tempfile.mkstemp(prefix="ibridge_msg_", suffix=".bmsg")[1])
         try:
             msg_iface = obex(path_s, "org.bluez.obex.Message1")
-            ret = msg_iface.Get(str(target), False)
+            # Second arg is MAP's "Attachment" flag. It was hardcoded False,
+            # which explicitly asks the phone to strip attachments from every
+            # message — so we could never have seen one. Ask for them; for a
+            # plain SMS with nothing attached this costs nothing.
+            ret = msg_iface.Get(str(target), True)
             transfer_path = str(ret[0]) if isinstance(ret, (tuple, list)) else str(ret)
         except dbus.exceptions.DBusException as e:
             log.error("Message1.Get failed for %s: %s", handle,
@@ -182,11 +187,51 @@ class _PendingFetch:
                 return
 
             blob = self.target.read_text(errors="replace")
+            self._maybe_dump(blob)
             parsed = parse_bmessage(blob)
             self._fire_full(parsed)
         finally:
             self.cleanup()
             self.listener._pending.pop(self.transfer_path, None)
+
+    def _maybe_dump(self, blob: str) -> None:
+        """Keep a copy of any bMessage that looks like it carries more than
+        plain text, so its structure can be inspected.
+
+        We've never seen an attachment come through — attachments were
+        being suppressed at fetch time — so there's no parser for them yet.
+        Capture real samples rather than guess at the format.
+        """
+        markers = ("BEGIN:BATT", "Content-Type:", "Content-Transfer-Encoding",
+                   "base64", "MMS", "image/", "video/", "audio/")
+        if not any(m.lower() in blob.lower() for m in markers):
+            return
+        try:
+            config.ensure_dirs()
+            dump_dir = config.STATE_DIR / "bmsg_samples"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            path = dump_dir / f"{self.handle}.bmsg"
+            path.write_text(blob, errors="replace")
+            log.warning("bMessage %s looks like it carries an attachment "
+                        "(%d bytes) — saved sample to %s",
+                        self.handle, len(blob), path)
+        except OSError as e:
+            log.debug("could not dump bMessage sample: %s", e)
+
+    @staticmethod
+    def _kind_for(folder: str | None) -> str:
+        """Direction from the bMessage FOLDER field.
+
+        iOS pushes messages you send from the phone as well as ones you
+        receive; the only thing distinguishing them is the folder
+        (telecom/msg/sent vs .../inbox). Without this everything was
+        recorded as incoming, so your own sent messages showed up as if the
+        other person had said them.
+        """
+        f = (folder or "").lower()
+        if "sent" in f or "outbox" in f:
+            return "sms_sent"
+        return "sms_received"
 
     def _fire_full(self, parsed) -> None:
         sender_raw = parsed.sender_phone
@@ -198,21 +243,26 @@ class _PendingFetch:
         # Use timestamp from initial props (BlueZ tends to populate it on the
         # Message1 object) when available; otherwise None
         ts = parse_map_timestamp(self.initial_props.get("Timestamp"))
+        kind = self._kind_for(
+            parsed.folder or str(self.initial_props.get("Folder") or ""))
         event = SmsEvent(
-            kind="sms_received",
+            kind=kind,
             handle=self.handle,
             sender_phone=sender_raw,
             sender_phone_norm=norm,
             contact_name=contact,
+            # A sent message is already read by definition.
             body=parsed.body,
             timestamp=ts,
-            is_read=str(parsed.status or "").upper() == "READ",
+            is_read=(kind == "sms_sent"
+                     or str(parsed.status or "").upper() == "READ"),
             raw_status=str(self.initial_props.get("Status") or "") or None,
             raw_type=parsed.type or str(self.initial_props.get("Type") or "") or None,
             message_path=self.message_path,
         )
-        log.info("sms_received from %s: %r",
-                 event.display_sender, (event.body or "")[:80])
+        log.info("%s %s %s: %r (folder=%s)",
+                 kind, "to" if kind == "sms_sent" else "from",
+                 event.display_sender, (event.body or "")[:80], parsed.folder)
         try:
             self.listener.on_sms(event)
         except Exception:

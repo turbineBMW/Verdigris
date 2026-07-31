@@ -35,6 +35,34 @@ class JsonlSink:
         """Same JSONL, kind: 'call_*' (see CallEvent.to_dict)."""
         self._append(event.to_dict())
 
+    def handle_state(self, props: dict) -> None:
+        """Delivery/read/edit/unsend — updates an existing message, not a new one.
+
+        Written so a UI restart can rebuild captions and edited text. Typing
+        is deliberately not persisted (ephemeral).
+        """
+        state = props.get("state") or ""
+        if state in ("typing", "typing_stopped"):
+            return
+        payload = {
+            "kind": "message_state",
+            # Stable-ish id so reloads can skip a line already applied.
+            "handle": (
+                props.get("handle_id")
+                or "state:{guid}:{state}:{ts}".format(
+                    guid=props.get("guid") or "",
+                    state=state,
+                    ts=props.get("timestamp") or "",
+                )
+            ),
+            "guid": props.get("guid") or "",
+            "state": state,
+            "peer_handle": props.get("handle") or "",
+            "timestamp": props.get("timestamp") or "",
+            "body": props.get("body") or "",
+        }
+        self._append(payload)
+
     def _append(self, payload: dict) -> None:
         try:
             with self.path.open("a", encoding="utf-8") as f:
