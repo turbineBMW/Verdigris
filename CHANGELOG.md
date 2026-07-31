@@ -19,6 +19,9 @@ Two subsystems that did not exist at 0.1.0, plus the app that renders them.
   captions and post-edit text survive a restart.
 
 ### Fixed
+- Stickers that sit inside a message (U+FFFC in the body) are drawn inline in
+  the bubble instead of as a free-standing attachment above a caption that
+  still showed the placeholder glyph.
 - A reset APNs connection left the helper alive and serving with nothing behind
   it: sends still worked and status still read "available" while no inbound
   message arrived again. The helper now exits so systemd rebuilds the

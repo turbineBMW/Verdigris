@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -71,6 +72,15 @@ _RUN_GAP_PX = 6
 # scaled relative to it.
 _BODY_PX = 13
 
+# NSAttributedString object-replacement character. Backup bodies (and live
+# sticker parts, after the bridge writes one) mark where a sticker sits
+# inside the text. Without consuming these, the UI draws a lone sticker row
+# above the bubble *and* leaves the placeholder glyph in the caption.
+_OBJ_REPLACEMENT = "\ufffc"
+# Max edge for a sticker drawn inside a text bubble. Free-standing stickers
+# stay larger; these share a line with words.
+_INLINE_STICKER_PX = 80
+
 # Backstop reconciliation against events.jsonl.
 _SYNC_INTERVAL_MS = 10_000
 # A message we send from here is echoed back by the phone in its SENT folder
@@ -120,6 +130,82 @@ def _thread_key(ev: dict) -> str:
 
 def _file_url(path: str | Path | None) -> str:
     return f"file://{path}" if path else ""
+
+
+def _sticker_img_html(att: dict) -> str:
+    """Qt rich-text `<img>` for a sticker living inside a text bubble."""
+    url = _file_url(att.get("path"))
+    w = int(att.get("w") or 0)
+    h = int(att.get("h") or 0)
+    max_px = _INLINE_STICKER_PX
+    if w > 0 and h > 0:
+        scale = min(max_px / max(w, 1), max_px / max(h, 1), 1.0)
+        dw = max(1, round(w * scale))
+        dh = max(1, round(h * scale))
+    else:
+        dw = dh = max_px
+    return (
+        f'<img src="{escape(url, quote=True)}" '
+        f'width="{dw}" height="{dh}" />'
+    )
+
+
+def _body_with_inline_stickers(
+    body: str, atts: list[dict]
+) -> tuple[str, str, bool, list[dict]]:
+    """Split a message into bubble text and free-standing attachment rows.
+
+    Each U+FFFC in `body` claims the next sticker that has a path on disk and
+    is rendered as an `<img>` inside the text bubble. Stickers without a
+    matching marker (or without bytes yet) still become their own rows —
+    that's the free-standing sticker / photo path. Returns
+    `(plain_body, rich_body, jumbo, free_standing_atts)`.
+    """
+    body = body or ""
+    if _OBJ_REPLACEMENT not in body:
+        rich, jumbo = body_markup(body, _BODY_PX)
+        return body, rich, jumbo, list(atts)
+
+    # Only stickers that can actually be drawn take an inline slot.
+    queue = [a for a in atts if a.get("is_sticker") and a.get("path")]
+    free = [a for a in atts if not (a.get("is_sticker") and a.get("path"))]
+
+    pieces = body.split(_OBJ_REPLACEMENT)
+    used: list[dict] = []
+    # Alternating text segments and the stickers that filled the gaps.
+    segments: list[tuple[str, object]] = []
+    for i, piece in enumerate(pieces):
+        segments.append(("t", piece))
+        if i + 1 >= len(pieces):
+            break
+        if queue:
+            att = queue.pop(0)
+            used.append(att)
+            segments.append(("s", att))
+        # An unmatched marker is dropped rather than shown as a tofu glyph.
+
+    plain = "".join(p for kind, p in segments if kind == "t")
+    # Stickers the body never pointed at stay free-standing.
+    free = free + queue
+
+    if not plain.strip():
+        # Marker-only bodies are bare stickers, not an empty bubble with an
+        # image glued inside it.
+        return "", "", False, free + used
+
+    if not used:
+        rich, jumbo = body_markup(plain, _BODY_PX)
+        return plain, rich, jumbo, free
+
+    chunks: list[str] = []
+    for kind, val in segments:
+        if kind == "t":
+            em, _ = body_markup(val, _BODY_PX)
+            chunks.append(em if em else escape(val).replace("\n", "<br>"))
+        else:
+            chunks.append(_sticker_img_html(val))
+    # Inline stickers keep the bubble; jumbo is for emoji-only text.
+    return plain, "".join(chunks), False, free
 
 
 class _DictListModel(QAbstractListModel):
@@ -1423,10 +1509,11 @@ class ThreadStore(QObject):
                   nxt: dict | None = None) -> list[dict]:
         """Rows to draw for one message.
 
-        Attachments get their own rows rather than being crammed into the
-        text bubble: a photo reads as a standalone rounded image and a
-        sticker as a bare transparent one, with any accompanying text as a
-        separate bubble beside it — the way Messages shows them.
+        Photos and free-standing stickers get their own rows (rounded image /
+        bare transparent sticker). Stickers that sit *inside* the text —
+        marked by U+FFFC in the body — are drawn inline in the bubble instead
+        of as a lone attachment above a caption that still shows the
+        placeholder glyph.
         """
         # Only stamp the conversation where it actually paused, the way
         # Messages.app does — not once per bubble.
@@ -1459,8 +1546,12 @@ class ThreadStore(QObject):
             reaction = _file_url(base / _PLACEHOLDER_ICON)
 
         outgoing = bool(msg["outgoing"])
-        body = (msg.get("body") or "").strip()
         atts = msg.get("attachments") or []
+        # Stickers whose position is marked in the body become `<img>` tags
+        # inside the bubble; everything else still gets its own row.
+        body, rich_body, jumbo, free_atts = _body_with_inline_stickers(
+            msg.get("body") or "", atts)
+        body = body.strip()
         # Only label the sender in a group chat — in a 1:1 thread it's the
         # person whose conversation you already have open.
         thread = self._threads.get(self._current) or {}
@@ -1514,7 +1605,7 @@ class ThreadStore(QObject):
                     "replyBody": self._reply_snippet(msg)}
 
         rows: list[dict] = []
-        for att in atts:
+        for att in free_atts:
             mime = (att.get("mime") or "").lower()
             name = att.get("name") or "Attachment"
             url = _file_url(att.get("path"))
@@ -1546,10 +1637,14 @@ class ThreadStore(QObject):
 
         if body or not rows:
             r = base_row("text")
-            r["body"] = msg.get("body") or ""
+            # Plain body has U+FFFC stripped (or never had one), so copy and
+            # edit don't carry the placeholder glyph.
+            r["body"] = body
             # Emoji need their own font-size to not look shrunken next to
-            # the text, and an emoji-only message drops its bubble entirely.
-            r["richBody"], r["jumbo"] = body_markup(r["body"], _BODY_PX)
+            # the text; stickers land as `<img>` tags in the same rich body.
+            # An emoji-only message drops its bubble entirely.
+            r["richBody"] = rich_body
+            r["jumbo"] = jumbo
             # No attachment and no text: media the phone never handed over
             # (MAP strips it), so say that instead of drawing a blank bubble.
             r["mediaOnly"] = not body and not atts
