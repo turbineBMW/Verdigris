@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Messages
+GenericName=iPhone Messages
+Comment=Your iPhone's messages, notifications, and calls on the Linux desktop
+Exec=iphonebridge-qt
+Icon=com.gabriel.iphonebridge.UI
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;Telephony;Qt;
+Keywords=iPhone;SMS;iMessage;Bluetooth;Calls;Notifications;Messages;
+StartupNotify=true
+StartupWMClass=iphonebridge-qt
