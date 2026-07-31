@@ -1,20 +1,18 @@
-"""Stickers that sit inside a message body must render in the bubble.
+"""True inline media uses U+F00A; free-standing stickers use U+FFFC.
 
-sms.db (and live sticker parts) mark those positions with U+FFFC. Before this
-was wired up, the UI drew the sticker as a free-standing row above the text
-and left the placeholder glyph in the caption — so every "sticker + words"
-message looked broken.
+"3-0 on my return" (live, the fucky group) is the inline case: the image
+attachment belongs *inside* the text bubble at the F00A slot. Bitmoji /
+peels marked with U+FFFC stay free-standing rows — inlining those was wrong
+and turned "￼This mf so cute dawg" into a caption with a glued-on image.
 """
 from __future__ import annotations
 
-from iphonebridge.imessage.bridge import translate
 from iphonebridge.qtui.models import (
+    _INLINE_MEDIA,
     _OBJ_REPLACEMENT,
-    _body_with_inline_stickers,
+    _body_with_inline_media,
     ThreadStore,
 )
-
-MY = ["tel:+12155550150"]
 
 
 def _store() -> ThreadStore:
@@ -42,11 +40,25 @@ def _msg(body: str, atts: list[dict], **kw) -> dict:
     return m
 
 
-def _sticker(path="/tmp/cute-sticker.png", **kw) -> dict:
+def _image(path="/tmp/inline.png", **kw) -> dict:
+    """Live inline media often arrives with is_sticker=false."""
     att = {
         "path": path,
         "mime": "image/png",
-        "name": "cute-sticker.png",
+        "name": "inline.png",
+        "is_sticker": False,
+        "w": 320,
+        "h": 320,
+    }
+    att.update(kw)
+    return att
+
+
+def _sticker(path="/tmp/bitmoji.png", **kw) -> dict:
+    att = {
+        "path": path,
+        "mime": "image/png",
+        "name": "bitmoji.png",
         "is_sticker": True,
         "w": 400,
         "h": 400,
@@ -55,177 +67,81 @@ def _sticker(path="/tmp/cute-sticker.png", **kw) -> dict:
     return att
 
 
-def test_inline_sticker_lives_in_the_text_bubble():
-    """One row: the sticker is an <img> in richBody, not a bare sticker row."""
+def test_f00a_inline_media_lives_in_the_text_bubble():
+    """The real "3-0 on my return" shape: one bubble, image at the slot."""
     store = _store()
-    body = f"{_OBJ_REPLACEMENT}This mf so cute dawg"
-    rows = store._rows_for(_msg(body, [_sticker()]), None)
+    body = f"3-0 on my return{_INLINE_MEDIA}"
+    rows = store._rows_for(_msg(body, [_image()]), None)
     assert len(rows) == 1
     assert rows[0]["kind"] == "text"
-    assert rows[0]["body"] == "This mf so cute dawg"
-    assert _OBJ_REPLACEMENT not in rows[0]["body"]
-    assert '<img src="file:///tmp/cute-sticker.png"' in rows[0]["richBody"]
-    assert "This mf so cute dawg" in rows[0]["richBody"]
+    assert rows[0]["body"] == "3-0 on my return"
+    assert _INLINE_MEDIA not in rows[0]["body"]
+    assert '<img src="file:///tmp/inline.png"' in rows[0]["richBody"]
+    assert "3-0 on my return" in rows[0]["richBody"]
     assert rows[0]["jumbo"] is False
 
 
-def test_standalone_sticker_stays_bare():
-    """No surrounding text → free-standing transparent sticker, as before."""
+def test_f00a_accepts_non_sticker_images():
+    """Daemon marks many inline stickers is_sticker=false; still inline them."""
+    plain, rich, jumbo, free = _body_with_inline_media(
+        f"hi{_INLINE_MEDIA}", [_image(is_sticker=False)]
+    )
+    assert plain == "hi"
+    assert free == []
+    assert "<img" in rich
+    assert jumbo is False
+
+
+def test_bitmoji_with_fffc_stays_free_standing():
+    """￼This mf so cute dawg — bare sticker row + clean caption, not inline."""
     store = _store()
-    rows = store._rows_for(_msg("", [_sticker()]), None)
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "sticker"
-    assert rows[0]["image"] == "file:///tmp/cute-sticker.png"
+    body = f"{_OBJ_REPLACEMENT}This mf so cute dawg"
+    rows = store._rows_for(_msg(body, [_sticker()]), None)
+    assert [r["kind"] for r in rows] == ["sticker", "text"]
+    assert rows[0]["image"] == "file:///tmp/bitmoji.png"
+    assert rows[1]["body"] == "This mf so cute dawg"
+    assert _OBJ_REPLACEMENT not in rows[1]["body"]
+    assert "<img" not in (rows[1]["richBody"] or "")
 
 
-def test_marker_only_body_is_still_a_bare_sticker():
-    """A body that is nothing but U+FFFC is an attachment-only message."""
+def test_fffc_only_body_is_bare_sticker():
     store = _store()
     rows = store._rows_for(_msg(_OBJ_REPLACEMENT, [_sticker()]), None)
     assert len(rows) == 1
     assert rows[0]["kind"] == "sticker"
 
 
-def test_sticker_without_marker_stays_free_standing():
-    """Caption with no U+FFFC keeps the sticker above the text bubble."""
+def test_standalone_sticker_stays_bare():
     store = _store()
-    rows = store._rows_for(
-        _msg("look at this", [_sticker()]), None
-    )
+    rows = store._rows_for(_msg("", [_sticker()]), None)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "sticker"
+
+
+def test_caption_without_marker_keeps_sticker_above_text():
+    store = _store()
+    rows = store._rows_for(_msg("look at this", [_sticker()]), None)
     assert [r["kind"] for r in rows] == ["sticker", "text"]
     assert rows[1]["body"] == "look at this"
     assert "<img" not in (rows[1]["richBody"] or "")
 
 
-def test_two_inline_stickers_match_markers_in_order():
-    body = f"this one mines{_OBJ_REPLACEMENT} and this one is ky’s {_OBJ_REPLACEMENT}"
-    a = _sticker(path="/tmp/a.png", name="a.png")
-    b = _sticker(path="/tmp/b.png", name="b.png")
-    plain, rich, jumbo, free = _body_with_inline_stickers(body, [a, b])
-    assert plain == "this one mines and this one is ky’s "
-    assert free == []
-    assert jumbo is False
-    assert rich.index("file:///tmp/a.png") < rich.index("file:///tmp/b.png")
-    assert rich.count("<img") == 2
-
-
-def test_photo_is_not_pulled_inline():
-    """Only stickers fill U+FFFC slots; a regular image stays its own row."""
+def test_f00a_before_download_drops_glyph_not_attachment_row():
+    """No path yet → no free-standing broken image; just the clean text."""
     store = _store()
-    photo = {
-        "path": "/tmp/photo.jpg",
-        "mime": "image/jpeg",
-        "name": "photo.jpg",
-        "is_sticker": False,
-        "w": 800,
-        "h": 600,
-    }
-    body = f"{_OBJ_REPLACEMENT}caption"
-    # No sticker available to claim the marker — photo is free-standing,
-    # marker is dropped so the caption is clean.
-    rows = store._rows_for(_msg(body, [photo]), None)
+    body = f"3-0 on my return{_INLINE_MEDIA}"
+    att = {"name": "x.png", "mime": "image/png", "is_sticker": False}
+    rows = store._rows_for(_msg(body, [att]), None)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "text"
+    assert rows[0]["body"] == "3-0 on my return"
+    assert "<img" not in (rows[0]["richBody"] or "")
+
+
+def test_photo_without_f00a_stays_its_own_row():
+    store = _store()
+    photo = _image(path="/tmp/photo.jpg", name="photo.jpg", is_sticker=False,
+                   w=800, h=600)
+    rows = store._rows_for(_msg("caption", [photo]), None)
     assert [r["kind"] for r in rows] == ["image", "text"]
     assert rows[1]["body"] == "caption"
-    assert "<img" not in (rows[1]["richBody"] or "")
-
-
-def test_live_sticker_part_writes_a_body_marker():
-    """The bridge must leave U+FFFC so live traffic shares the backup path."""
-    event = {
-        "event": "message",
-        "inst": {
-            "id": "CC9AE249",
-            "sender": "tel:+12155550101",
-            "conversation": {
-                "participants": ["tel:+12155550150", "tel:+12155550101"],
-            },
-            "message": {
-                "Message": {
-                    "parts": [
-                        {
-                            "part": {
-                                "Attachment": {
-                                    "name": "s.png",
-                                    "mime": "image/png",
-                                    "uti": "com.apple.sticker",
-                                }
-                            }
-                        },
-                        {"part": {"Text": ["hi there", {}]}},
-                    ]
-                }
-            },
-        },
-    }
-    tr = translate(event, MY)
-    assert tr is not None
-    assert tr.event is not None
-    assert tr.event.body == f"{_OBJ_REPLACEMENT}hi there"
-    assert tr.extras.attachments[0]["name"] == "s.png"
-
-
-def test_live_photo_part_does_not_write_a_body_marker():
-    """Photos remain free-standing; only stickers claim a body slot."""
-    event = {
-        "event": "message",
-        "inst": {
-            "id": "CC9AE249",
-            "sender": "tel:+12155550101",
-            "conversation": {
-                "participants": ["tel:+12155550150", "tel:+12155550101"],
-            },
-            "message": {
-                "Message": {
-                    "parts": [
-                        {
-                            "part": {
-                                "Attachment": {
-                                    "name": "x.png",
-                                    "mime": "image/png",
-                                    "uti": "public.png",
-                                }
-                            }
-                        },
-                        {"part": {"Text": ["caption", {}]}},
-                    ]
-                }
-            },
-        },
-    }
-    tr = translate(event, MY)
-    assert tr is not None
-    assert tr.event.body == "caption"
-    assert _OBJ_REPLACEMENT not in (tr.event.body or "")
-
-
-def test_live_sticker_only_still_gets_filename_placeholder():
-    """Until the bytes land, a sticker-only message needs something to show."""
-    event = {
-        "event": "message",
-        "inst": {
-            "id": "CC9AE249",
-            "sender": "tel:+12155550101",
-            "conversation": {
-                "participants": ["tel:+12155550150", "tel:+12155550101"],
-            },
-            "message": {
-                "Message": {
-                    "parts": [
-                        {
-                            "part": {
-                                "Attachment": {
-                                    "name": "s.png",
-                                    "mime": "image/png",
-                                    "uti": "com.apple.sticker",
-                                }
-                            }
-                        },
-                    ]
-                }
-            },
-        },
-    }
-    tr = translate(event, MY)
-    assert tr is not None
-    assert tr.event.body == "[s.png]"
-    assert _OBJ_REPLACEMENT not in (tr.event.body or "")

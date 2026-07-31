@@ -72,14 +72,18 @@ _RUN_GAP_PX = 6
 # scaled relative to it.
 _BODY_PX = 13
 
-# NSAttributedString object-replacement character. Backup bodies (and live
-# sticker parts, after the bridge writes one) mark where a sticker sits
-# inside the text. Without consuming these, the UI draws a lone sticker row
-# above the bubble *and* leaves the placeholder glyph in the caption.
+# Apple's free-standing attachment marker in attributed bodies (Bitmoji,
+# peels, full stickers with a caption). Those stay their own rows; we only
+# strip the glyph so it doesn't show as tofu in the caption.
 _OBJ_REPLACEMENT = "\ufffc"
-# Max edge for a sticker drawn inside a text bubble. Free-standing stickers
+# Live inline-media slot (U+F00A). The matching image attachment is drawn
+# *inside* the bubble at this position, not as a free-standing row above
+# the text. Distinct from U+FFFC — treating those the same wrongly ate
+# Bitmoji into the caption bubble.
+_INLINE_MEDIA = "\uf00a"
+# Max edge for media drawn inside a text bubble. Free-standing stickers
 # stay larger; these share a line with words.
-_INLINE_STICKER_PX = 80
+_INLINE_MEDIA_PX = 80
 
 # Backstop reconciliation against events.jsonl.
 _SYNC_INTERVAL_MS = 10_000
@@ -132,12 +136,12 @@ def _file_url(path: str | Path | None) -> str:
     return f"file://{path}" if path else ""
 
 
-def _sticker_img_html(att: dict) -> str:
-    """Qt rich-text `<img>` for a sticker living inside a text bubble."""
+def _inline_img_html(att: dict) -> str:
+    """Qt rich-text `<img>` for media sitting inside a text bubble."""
     url = _file_url(att.get("path"))
     w = int(att.get("w") or 0)
     h = int(att.get("h") or 0)
-    max_px = _INLINE_STICKER_PX
+    max_px = _INLINE_MEDIA_PX
     if w > 0 and h > 0:
         scale = min(max_px / max(w, 1), max_px / max(h, 1), 1.0)
         dw = max(1, round(w * scale))
@@ -150,48 +154,65 @@ def _sticker_img_html(att: dict) -> str:
     )
 
 
-def _body_with_inline_stickers(
+def _inline_candidate(att: dict) -> bool:
+    """Could this attachment fill a U+F00A slot (once its bytes land)?
+
+    Live inline stickers often arrive with `is_sticker: false` and a plain
+    image UTI — the F00A marker is what makes them inline, not the flag.
+    Path is optional: a pre-download descriptor is still claimed by the slot
+    so it doesn't become a free-standing empty image row.
+    """
+    if att.get("is_sticker"):
+        return True
+    return (att.get("mime") or "").lower().startswith("image/")
+
+
+def _body_with_inline_media(
     body: str, atts: list[dict]
 ) -> tuple[str, str, bool, list[dict]]:
     """Split a message into bubble text and free-standing attachment rows.
 
-    Each U+FFFC in `body` claims the next sticker that has a path on disk and
-    is rendered as an `<img>` inside the text bubble. Stickers without a
-    matching marker (or without bytes yet) still become their own rows —
-    that's the free-standing sticker / photo path. Returns
+    U+F00A marks true *inline* media (words and image in one bubble). Each
+    slot claims the next image attachment; with a path it becomes an `<img>`,
+    without one the glyph is just dropped until download finishes. U+FFFC is
+    only the free-standing attachment marker (Bitmoji, peels) — those stay
+    their own rows and the glyph is stripped from the caption. Returns
     `(plain_body, rich_body, jumbo, free_standing_atts)`.
     """
     body = body or ""
-    if _OBJ_REPLACEMENT not in body:
-        rich, jumbo = body_markup(body, _BODY_PX)
-        return body, rich, jumbo, list(atts)
+    # No inline slots: free-standing attachments keep their rows; just scrub
+    # the attributed-string placeholder out of the caption.
+    if _INLINE_MEDIA not in body:
+        plain = body.replace(_OBJ_REPLACEMENT, "")
+        rich, jumbo = body_markup(plain, _BODY_PX)
+        return plain, rich, jumbo, list(atts)
 
-    # Only stickers that can actually be drawn take an inline slot.
-    queue = [a for a in atts if a.get("is_sticker") and a.get("path")]
-    free = [a for a in atts if not (a.get("is_sticker") and a.get("path"))]
+    queue = [a for a in atts if _inline_candidate(a)]
+    free = [a for a in atts if not _inline_candidate(a)]
 
-    pieces = body.split(_OBJ_REPLACEMENT)
+    pieces = body.split(_INLINE_MEDIA)
     used: list[dict] = []
-    # Alternating text segments and the stickers that filled the gaps.
     segments: list[tuple[str, object]] = []
     for i, piece in enumerate(pieces):
-        segments.append(("t", piece))
+        # FFFC can co-exist in theory; never draw it.
+        segments.append(("t", piece.replace(_OBJ_REPLACEMENT, "")))
         if i + 1 >= len(pieces):
             break
-        if queue:
-            att = queue.pop(0)
+        if not queue:
+            # Unmatched F00A is dropped rather than shown as tofu.
+            continue
+        att = queue.pop(0)
+        if att.get("path"):
             used.append(att)
-            segments.append(("s", att))
-        # An unmatched marker is dropped rather than shown as a tofu glyph.
+            segments.append(("m", att))
+        # Claimed but not on disk yet: hold the slot, draw nothing until
+        # the attachment state lands and the row is rebuilt.
 
     plain = "".join(p for kind, p in segments if kind == "t")
-    # Stickers the body never pointed at stay free-standing.
     free = free + queue
 
-    if not plain.strip():
-        # Marker-only bodies are bare stickers, not an empty bubble with an
-        # image glued inside it.
-        return "", "", False, free + used
+    if not plain.strip() and not used:
+        return "", "", False, free
 
     if not used:
         rich, jumbo = body_markup(plain, _BODY_PX)
@@ -203,8 +224,8 @@ def _body_with_inline_stickers(
             em, _ = body_markup(val, _BODY_PX)
             chunks.append(em if em else escape(val).replace("\n", "<br>"))
         else:
-            chunks.append(_sticker_img_html(val))
-    # Inline stickers keep the bubble; jumbo is for emoji-only text.
+            chunks.append(_inline_img_html(val))
+    # Inline media keeps the bubble; jumbo is for emoji-only text.
     return plain, "".join(chunks), False, free
 
 
@@ -1509,11 +1530,10 @@ class ThreadStore(QObject):
                   nxt: dict | None = None) -> list[dict]:
         """Rows to draw for one message.
 
-        Photos and free-standing stickers get their own rows (rounded image /
-        bare transparent sticker). Stickers that sit *inside* the text —
-        marked by U+FFFC in the body — are drawn inline in the bubble instead
-        of as a lone attachment above a caption that still shows the
-        placeholder glyph.
+        Photos and free-standing stickers (Bitmoji, peels) get their own rows.
+        True inline media — marked by U+F00A in the body — is drawn inside
+        the text bubble. U+FFFC is only scrubbed out of captions; those
+        attachments stay free-standing.
         """
         # Only stamp the conversation where it actually paused, the way
         # Messages.app does — not once per bubble.
@@ -1547,9 +1567,9 @@ class ThreadStore(QObject):
 
         outgoing = bool(msg["outgoing"])
         atts = msg.get("attachments") or []
-        # Stickers whose position is marked in the body become `<img>` tags
-        # inside the bubble; everything else still gets its own row.
-        body, rich_body, jumbo, free_atts = _body_with_inline_stickers(
+        # U+F00A slots become `<img>` tags inside the bubble; free-standing
+        # stickers/photos (and U+FFFC Bitmoji) still get their own rows.
+        body, rich_body, jumbo, free_atts = _body_with_inline_media(
             msg.get("body") or "", atts)
         body = body.strip()
         # Only label the sender in a group chat — in a 1:1 thread it's the

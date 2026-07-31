@@ -30,11 +30,6 @@ log = logging.getLogger(__name__)
 # Unix epoch, unlike sms.db's Core Data offsets — no 2001 epoch here.
 _MS = 1000.0
 
-# Same character the backup importer leaves in sms.db bodies. Written into
-# live text wherever a sticker (or Object part) sits so the UI can draw it
-# inline instead of as a free-standing attachment above a placeholder glyph.
-_OBJ_REPLACEMENT = "\ufffc"
-
 # Tapback verbs, matching the phrasing MAP synthesizes for the same thing, so
 # reactions from either transport render identically.
 _REACTION_VERBS = {
@@ -138,16 +133,10 @@ def _text_from_parts(parts) -> tuple[str, list[dict]]:
                     "size": payload.get("size"),
                 }
             )
-            # Stickers occupy a slot in the body the way the backup's
-            # attributed string does, so surrounding text and the sticker
-            # stay one bubble. Photos stay free-standing rows.
-            uti = (payload.get("uti") or payload.get("uti_type") or "").lower()
-            if "sticker" in uti:
-                chunks.append(_OBJ_REPLACEMENT)
         elif name == "Object":
-            # Inline media slot; a matching attachment (usually a sticker)
-            # fills it when the UI walks the body.
-            chunks.append(_OBJ_REPLACEMENT)
+            # Inline media is already represented in the Text part as U+F00A.
+            # The attachment entry carries the bytes; nothing to splice in.
+            continue
     return "".join(chunks), attachments
 
 
@@ -194,12 +183,6 @@ def translate(event: dict, my_handles: set[str]) -> Translated | None:
         body, attachments = _text_from_parts(payload.get("parts"))
         extras.attachments = attachments
         extras.reply_to_guid = payload.get("reply_guid")
-        # Stickers write U+FFFC into the body for inline placement. A message
-        # that is *only* those markers is still attachment-only — drop them
-        # so the `[name]` placeholder below still covers the pre-download
-        # window, matching the backup importer's treatment of pure-￼ bodies.
-        if body and not body.replace(_OBJ_REPLACEMENT, "").strip():
-            body = ""
         subject = payload.get("subject")
         if subject:
             # iMessage shows the subject as a bold first line.

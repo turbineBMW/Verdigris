@@ -19,9 +19,9 @@ Two subsystems that did not exist at 0.1.0, plus the app that renders them.
   captions and post-edit text survive a restart.
 
 ### Fixed
-- Stickers that sit inside a message (U+FFFC in the body) are drawn inline in
-  the bubble instead of as a free-standing attachment above a caption that
-  still showed the placeholder glyph.
+- True inline media (U+F00A in the body, e.g. "3-0 on my return") is drawn
+  inside the text bubble. Free-standing Bitmoji/peels (U+FFFC) stay their own
+  rows, with the placeholder glyph stripped from the caption.
 - A reset APNs connection left the helper alive and serving with nothing behind
   it: sends still worked and status still read "available" while no inbound
   message arrived again. The helper now exits so systemd rebuilds the
