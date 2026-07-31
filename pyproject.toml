@@ -31,12 +31,17 @@ dev = [
   "pytest>=7",
   "ruff>=0.5",
 ]
+# The Qt/QML desktop app. Optional so the daemon keeps working on machines
+# without Qt; only `iphonebridge-qt` needs it.
+qt = [
+  "PySide6>=6.6",
+]
 
 [project.scripts]
 iphonebridge = "iphonebridge.cli:app"
 
 [project.gui-scripts]
-iphonebridge-ui = "iphonebridge.ui.app:main"
+iphonebridge-qt = "iphonebridge.qtui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -56,7 +61,11 @@ select = ["E", "F", "I", "B", "UP", "RUF"]
 ignore = [
   "B904",   # `raise ... from err` not enforced — too pedantic for this size of project
   "RUF005", # iterable unpacking vs `+` — readability is a wash here
+  "RUF012", # class-level constant dicts; ClassVar annotations add noise, not safety
+  "RUF001", # curly quotes in comments and emoji in tables are deliberate, not typos
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]  # tests can have long lines for readability of bMessage fixtures
+# Qt's model API dictates the signature: `parent: QModelIndex = QModelIndex()`.
+"src/iphonebridge/qtui/models.py" = ["B008"]

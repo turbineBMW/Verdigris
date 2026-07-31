@@ -27,3 +27,25 @@ spike/results/**
 
 # Per-machine config
 config.local.toml
+
+# OpenBubbles / iMessage registration material. These plists contain the
+# Apple ID auth tokens, IDS identity keys and the rented Mac's hardware
+# identifiers — losing them means re-registering, leaking them means
+# someone else can send as this Apple ID. Never commit.
+data/openbubbles-registration-backup/
+data/openbubbles-registration-*.tar.gz
+data/imessage-state/
+
+# Vendored third-party Rust sources for the iMessage helper. rustpush is
+# Apache-2.0 upstream (OpenBubbles/rustpush) with closed-source stubs for
+# open-absinthe and clearadi; vendored rather than committed so the repo
+# doesn't carry someone else's tree.
+rust/rustpush/
+rust/*/target/
+
+# Working notes for AI agents and humans (CLAUDE.md is a symlink to AGENTS.md).
+# Local-only: the live-messaging rule names the owner's real phone number, and
+# that rule only works if the number in it is the real one — so the file stays
+# off any published fork rather than being sanitized into uselessness.
+AGENTS.md
+CLAUDE.md

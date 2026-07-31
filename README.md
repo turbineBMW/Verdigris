@@ -18,7 +18,7 @@
 
 Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifications on the desktop. There has never been a Linux equivalent — KDE Connect needs the Android/iOS *app* and only does Wi-Fi, `ancs4linux` does notifications only, Mac-relay bridges (BlueBubbles, AirMessage) need an actual Mac, and Beeper costs money.
 
-**iphonebridge is that missing piece.** It's a small Python daemon that talks to a paired iPhone over standard Bluetooth profiles (MAP, PBAP, ANCS, HFP) and surfaces everything as native desktop notifications, a CLI, and a GTK4 desktop app.
+**iphonebridge is that missing piece.** It's a small Python daemon that talks to a paired iPhone over standard Bluetooth profiles (MAP, PBAP, ANCS, HFP) and surfaces everything as native desktop notifications, a CLI, and a Qt desktop app.
 
 ## ✨ What it does
 
@@ -32,7 +32,7 @@ Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifica
 | 📞 **Take & place phone calls** — caller ID, answer/decline, dial | HFP via oFono | ✅ |
 | 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
 | 📜 **Message history** — incoming + your desktop replies | `sms-list` / the app | ✅ |
-| 🖥️ **Desktop app** — conversations, notification feed, call UI | GTK4 / libadwaita | ✅ |
+| 🖥️ **Desktop app** — conversations, notification feed, call UI | Qt / QML | ✅ |
 | ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
 
 ### 🤯 The iMessage surprise
@@ -61,8 +61,6 @@ As far as we know, **iphonebridge is the first free, open-source, Mac-free iMess
 
 ```bash
 sudo apt install bluez bluez-obexd python3-dbus python3-gi python3-venv
-# For the desktop app (iphonebridge-ui):
-sudo apt install gir1.2-gtk-4.0 gir1.2-adw-1
 # For auto-copying verification codes (Wayland):
 sudo apt install wl-clipboard
 ```
@@ -77,12 +75,12 @@ cd iphonebridge
 # (Never install those two from PyPI — the builds are notoriously fragile.)
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[qt]"
 
-# Put `iphonebridge` (CLI + daemon) and `iphonebridge-ui` (app) on your PATH
+# Put `iphonebridge` (CLI + daemon) and `iphonebridge-qt` (app) on your PATH
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/.venv/bin/iphonebridge" ~/.local/bin/iphonebridge
-ln -sf "$(pwd)/.venv/bin/iphonebridge-ui" ~/.local/bin/iphonebridge-ui
+ln -sf "$(pwd)/.venv/bin/iphonebridge-qt" ~/.local/bin/iphonebridge-qt
 ```
 
 ### 3 · Pair your iPhone
@@ -167,15 +165,17 @@ Lets the daemon set the adapter's Class-of-Device on every start without a passw
 
 ## 🖥️ Desktop app
 
-`iphonebridge-ui` is a GTK4 / libadwaita app — a separate process from the daemon, talking to it over D-Bus, so you can open and close it freely while the daemon keeps running in the background. Four tabs:
+`iphonebridge-qt` is a Qt / QML app — a separate process from the daemon, talking to it over D-Bus, so you can open and close it freely while the daemon keeps running in the background. On Plasma it exports a global menu (View / Status / Settings). Four pages:
 
 - **Messages** — SMS & iMessage conversations grouped by contact. Read history and reply from a compose box; the replies you send are saved into the thread.
 - **Notifications** — a live feed of every app's notifications (Slack, Mail, WhatsApp…), mirrored from the iPhone over ANCS.
 - **Calls** — a dialer to place calls, plus Answer / Hang-up controls for active ones; an incoming call raises this tab automatically.
 - **Setup** — daemon health, contact and message counts, and the iPhone-toggle checklist.
 
+**Launch at Login** is under **Settings** in the global menu (writes `~/.config/autostart/com.gabriel.iphonebridge.Qt.desktop`).
+
 ```bash
-iphonebridge-ui
+iphonebridge-qt
 ```
 
 ## 💻 CLI
@@ -241,14 +241,14 @@ systemctl --user {start,stop,restart} iphonebridge
         ┌────────────┼────────────┐
         ▼            ▼            ▼
   notifications   JSONL log   D-Bus service
-  + clipboard     (history)   (CLI · GTK app)
+  + clipboard     (history)   (CLI · Qt app)
 ```
 
 - **MAP** (Message Access Profile) — read SMS/iMessage, get real-time push of new ones, and send.
 - **PBAP** (Phone Book Access Profile) — pull the iPhone's contacts so messages show names, not numbers.
 - **ANCS** (Apple Notification Center Service) — every app's notifications, over a BLE GATT link.
 - **HFP** (Hands-Free Profile) — take and place calls; oFono speaks the HFP protocol, PipeWire's oFono backend carries the call audio to the laptop's mic/speakers.
-- One daemon, pluggable **sinks** (desktop popups, verification-code clipboard copy, append-only JSONL log), and a **D-Bus service** so the CLI and the GTK app can send messages, control calls, and subscribe to a live event feed.
+- One daemon, pluggable **sinks** (desktop popups, verification-code clipboard copy, append-only JSONL log), and a **D-Bus service** so the CLI and the Qt app can send messages, control calls, and subscribe to a live event feed.
 
 Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md).
 

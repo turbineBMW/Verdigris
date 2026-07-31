@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+Two subsystems that did not exist at 0.1.0, plus the app that renders them.
+
+### Added
+- **Direct iMessage transport** (`ib-imessage`, Rust) — speaks to Apple through
+  rustpush over its own systemd unit, giving guids, replies, edits, unsends,
+  tapbacks, typing indicators, attachments and receipts. MAP carries none of
+  these; it delivers incoming text and nothing more.
+- **Qt/QML desktop app** (`iphonebridge-qt`), replacing the GTK4 app.
+- **iOS backup import** (`iphonebridge backup-sync`), normalizing `sms.db` into
+  the same event shape the daemon emits.
+- Cross-transport deduplication: the same message arrives over MAP and iMessage
+  with no shared identifier, so matching is heuristic and only ever applied
+  across differing transports.
+- Delivery/read state and edit history persisted as `message_state` rows, so
+  captions and post-edit text survive a restart.
+
+### Fixed
+- A reset APNs connection left the helper alive and serving with nothing behind
+  it: sends still worked and status still read "available" while no inbound
+  message arrived again. The helper now exits so systemd rebuilds the
+  connection, and the daemon treats the loss as loss of transport.
+- Desktop notifications never closed on the iMessage path. The only automatic
+  close was a BlueZ MAP property change, which an iMessage does not produce.
+
+### Removed
+- The GTK4/libadwaita app and its desktop entry.
+
 ## [0.1.0] — 2026-05-19
 
 First tagged release. Working iphonebridge daemon on Pop!_OS 24.04

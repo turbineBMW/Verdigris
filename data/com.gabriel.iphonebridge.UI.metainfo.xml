@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.gabriel.iphonebridge.UI</id>
+  <id>com.gabriel.iphonebridge.Qt</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-or-later</project_license>
 
-  <name>iphonebridge</name>
+  <name>Messages</name>
   <summary>Your iPhone's messages, notifications, and calls on the Linux desktop</summary>
 
   <description>
@@ -21,7 +21,7 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">com.gabriel.iphonebridge.UI.desktop</launchable>
+  <launchable type="desktop-id">com.gabriel.iphonebridge.Qt.desktop</launchable>
 
   <categories>
     <category>Network</category>
@@ -32,16 +32,16 @@
   <url type="bugtracker">https://github.com/gabrielmeir53/iphonebridge/issues</url>
 
   <provides>
-    <binary>iphonebridge-ui</binary>
+    <binary>iphonebridge-qt</binary>
   </provides>
 
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.4.0" date="2026-05-20">
+    <release version="0.4.2" date="2026-07-30">
       <description>
-        <p>First GTK4 / libadwaita desktop app — conversations, a notification
-        feed, call UI, and a setup/status page.</p>
+        <p>Qt / QML desktop app is the primary UI (GTK front-end removed).
+        Global menu includes Settings → Launch at Login.</p>
       </description>
     </release>
   </releases>
