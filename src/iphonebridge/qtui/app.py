@@ -55,8 +55,8 @@ _AUTOSTART_DESKTOP = _AUTOSTART_DIR / f"{APP_ID}.desktop"
 _LEGACY_AUTOSTART = _AUTOSTART_DIR / "iphonebridge-ui.desktop"
 
 _PAGES = ("Messages", "Notifications", "Calls", "Setup")
-_HELP_URL = "https://github.com/gabrielmeir53/iphonebridge#readme"
-_ISSUES_URL = "https://github.com/gabrielmeir53/iphonebridge/issues"
+_HELP_URL = "https://github.com/gutbash/blue#readme"
+_ISSUES_URL = "https://github.com/gutbash/blue/issues"
 
 
 class DaemonState(QObject):

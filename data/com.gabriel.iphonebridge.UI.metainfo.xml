@@ -28,8 +28,8 @@
     <category>InstantMessaging</category>
   </categories>
 
-  <url type="homepage">https://github.com/gabrielmeir53/iphonebridge</url>
-  <url type="bugtracker">https://github.com/gabrielmeir53/iphonebridge/issues</url>
+  <url type="homepage">https://github.com/gutbash/blue</url>
+  <url type="bugtracker">https://github.com/gutbash/blue/issues</url>
 
   <provides>
     <binary>iphonebridge-qt</binary>

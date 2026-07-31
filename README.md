@@ -4,8 +4,8 @@
 
 **Your iPhone's messages, calls, notifications, and contacts — on your Linux desktop, over Bluetooth.**
 
-[![CI](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/gabrielmeir53/iphonebridge?color=brightgreen)](https://github.com/gabrielmeir53/iphonebridge/releases)
+[![CI](https://github.com/gutbash/blue/actions/workflows/ci.yml/badge.svg)](https://github.com/gutbash/blue/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/gutbash/blue?color=brightgreen)](https://github.com/gutbash/blue/releases)
 [![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux%20%2F%20GNOME-lightgrey.svg)](#requirements)
@@ -68,8 +68,8 @@ sudo apt install wl-clipboard
 ### 2 · Clone & install
 
 ```bash
-git clone https://github.com/gabrielmeir53/iphonebridge.git
-cd iphonebridge
+git clone https://github.com/gutbash/blue.git
+cd blue
 
 # A venv that inherits the system PyGObject + dbus-python.
 # (Never install those two from PyPI — the builds are notoriously fragile.)
