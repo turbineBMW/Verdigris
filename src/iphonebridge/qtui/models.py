@@ -140,6 +140,34 @@ _REACTION_EMOJI = {
     "Laughed at": "😂", "Emphasized": "‼️", "Questioned": "❓",
 }
 
+# What the UI's reaction row sends (`Heart`, `Like`, …) → the verb
+# `_apply_reaction` / `reaction_emoji` already understand. Also accepts the
+# lowercase forms and the past-tense MAP spellings so a single path covers
+# the picker, a re-tapped badge, and anything a test might pass.
+_KIND_TO_VERB = {
+    "heart": "Loved", "love": "Loved", "loved": "Loved",
+    "like": "Liked", "liked": "Liked",
+    "dislike": "Disliked", "disliked": "Disliked",
+    "laugh": "Laughed at", "laughed": "Laughed at", "laughed at": "Laughed at",
+    "emphasize": "Emphasized", "emphasized": "Emphasized",
+    "question": "Questioned", "questioned": "Questioned",
+}
+
+# Taking one of the six back. Arbitrary-emoji removals share one verb —
+# iMessage doesn't name the emoji it withdrew.
+_KIND_TO_REMOVAL = {
+    "heart": "Removed a heart from", "love": "Removed a heart from",
+    "loved": "Removed a heart from",
+    "like": "Removed a like from", "liked": "Removed a like from",
+    "dislike": "Removed a dislike from", "disliked": "Removed a dislike from",
+    "laugh": "Removed a laugh from", "laughed": "Removed a laugh from",
+    "laughed at": "Removed a laugh from",
+    "emphasize": "Removed an exclamation from",
+    "emphasized": "Removed an exclamation from",
+    "question": "Removed a question mark from",
+    "questioned": "Removed a question mark from",
+}
+
 
 # The other half of the same wire vocabulary: taking a tapback back. These
 # carry no emoji of their own — they withdraw whatever that person put on the
@@ -152,6 +180,28 @@ _REACTION_REMOVED = frozenset({
     # tapback never reaches MAP — see backup.imessage_db.REMOVED_EMOJI_VERB.
     "Removed a reaction from",
 })
+
+
+def _kind_to_reaction_verb(kind: str) -> str:
+    """Map a picker kind (`Heart` / `🎉`) onto the verb `_apply_reaction` uses."""
+    if not kind:
+        return ""
+    classic = _KIND_TO_VERB.get(kind.strip().lower())
+    if classic:
+        return classic
+    # Anything else is an arbitrary emoji (iOS 18+); same spelling the bridge
+    # produces for inbound ones so reaction_emoji peels the prefix off cleanly.
+    return f"Reacted {kind}"
+
+
+def _kind_to_removal_verb(kind: str) -> str:
+    """Map a picker kind onto the verb that withdraws that tapback."""
+    if not kind:
+        return ""
+    classic = _KIND_TO_REMOVAL.get(kind.strip().lower())
+    if classic:
+        return classic
+    return "Removed a reaction from"
 
 
 def reaction_emoji(verb: str | None) -> str:
@@ -3393,6 +3443,17 @@ class ThreadStore(QObject):
             return
         # The quoted snippet iOS renders on devices without real tapbacks.
         msg = self._by_guid.get(guid) or {}
+        # Paint the badge immediately. Apple does not echo a reaction back to
+        # the device that sent it (same as edits), so without this the
+        # desktop is the only place a successful tapback never appears — and
+        # a failed one looks identical. The wire call still runs; a failure
+        # logs a warning rather than rolling the badge back, which is the
+        # same trade-off send itself makes for blue bubbles.
+        verb = _kind_to_reaction_verb(kind)
+        if msg and verb:
+            self._apply_reaction(msg, verb, "me")
+            if self._current and getattr(self, "_message_model", None) is not None:
+                self._refresh_reactions(msg)
         self._act("react", self._client.react, guid, kind,
                   (msg.get("body") or "")[:64])
 
@@ -3400,6 +3461,12 @@ class ThreadStore(QObject):
     def unreact(self, guid: str, kind: str) -> None:
         if not guid:
             return
+        msg = self._by_guid.get(guid) or {}
+        verb = _kind_to_removal_verb(kind)
+        if msg and verb:
+            self._apply_reaction(msg, verb, "me")
+            if self._current and getattr(self, "_message_model", None) is not None:
+                self._refresh_reactions(msg)
         self._act("unreact", self._client.unreact, guid, kind)
 
     @Slot(str, str)

@@ -309,6 +309,9 @@ class MessagesService(dbus.service.Object):
             kind=None if emoji else (kind or "heart"),
             emoji=emoji,
             target_text=target_text,
+            # Part 0 is the text body. Without it rustpush writes a bare
+            # target uuid and the reaction never attaches on the phone.
+            target_part=0,
         )
         # A tapback is aimed at a specific message, so it's the clearest
         # possible admission of having read it. Edit and Unsend act on our
@@ -329,6 +332,7 @@ class MessagesService(dbus.service.Object):
             kind=None if emoji else (kind or "heart"),
             emoji=emoji,
             enable=False,
+            target_part=0,
         )
 
     @dbus.service.method(IFACE, in_signature="sss", out_signature="s")

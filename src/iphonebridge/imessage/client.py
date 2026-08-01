@@ -363,7 +363,10 @@ class IMessageClient:
             chat=self._chat(participants, name, guid),
             target_guid=target_guid,
             target_text=target_text,
-            target_part=target_part,
+            # Part 0 = the text body of a normal message. Omitting it makes
+            # rustpush write a bare target uuid, which never attaches as a
+            # tapback on the phone or any other client.
+            target_part=0 if target_part is None else target_part,
             kind=kind,
             emoji=emoji,
             enable=enable,

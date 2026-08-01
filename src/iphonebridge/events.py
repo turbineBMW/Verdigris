@@ -138,6 +138,12 @@ class SmsEvent:
     # Derived, not passed by callers — see _detect_reaction() above.
     reaction_verb: str | None = field(default=None, init=False)
     reaction_snippet: str | None = field(default=None, init=False)
+    # Exact message a tapback targets. MAP never has this (only a quoted
+    # snippet); the native transport does, and without it on the event itself
+    # the target is lost the moment the event hits a sink — extras ride only
+    # the D-Bus bus. Native reactions also arrive with empty to_text, so the
+    # snippet fallback cannot recover them after a restart.
+    reaction_target_guid: str | None = None
 
     def __post_init__(self) -> None:
         self.reaction_verb, self.reaction_snippet = _detect_reaction(self.body)
@@ -167,6 +173,7 @@ class SmsEvent:
             "seen_at": self.seen_at.isoformat(),
             "reaction_verb": self.reaction_verb,
             "reaction_snippet": self.reaction_snippet,
+            "reaction_target_guid": self.reaction_target_guid,
         }
 
 

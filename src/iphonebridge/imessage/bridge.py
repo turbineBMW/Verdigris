@@ -276,6 +276,11 @@ def translate(event: dict, my_handles: set[str]) -> Translated | None:
         # correctly until the app restarted and then reloaded as an ordinary
         # bubble, which reads as replies simply not working.
         reply_to_guid=extras.reply_to_guid,
+        # Same promotion for the tapback target: rustpush hands us the exact
+        # guid but hardcodes `to_text` empty, so the MAP-style snippet match
+        # has nothing to find. Without this on the event, every native
+        # reaction is a badge that never lands.
+        reaction_target_guid=extras.reaction_target_guid,
     )
     return Translated(event=sms, extras=extras)
 

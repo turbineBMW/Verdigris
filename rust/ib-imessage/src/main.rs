@@ -403,9 +403,17 @@ impl Session {
                         other.unwrap_or("<none>")
                     ),
                 };
+                // Classic tapbacks (and emoji ones) address a *part* of the
+                // target message. rustpush only writes the wire form
+                // `p:{part}/{uuid}` when `to_part` is set; with None it sends
+                // a bare uuid, which Apple accepts but no client attaches as a
+                // tapback — so reactions appeared to send and then vanished
+                // on every device, including the phone. Part 0 is the text
+                // body of an ordinary message; callers that know a richer
+                // multi-part layout can still pass an explicit index.
                 let react = ReactMessage {
                     to_uuid: target_guid,
-                    to_part: target_part,
+                    to_part: Some(target_part.unwrap_or(0)),
                     reaction: ReactMessageType::React { reaction, enable },
                     to_text: target_text,
                     embedded_profile: None,

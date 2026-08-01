@@ -58,6 +58,24 @@ def test_react_sends_emoji_through_unchanged(store):
     assert store._client.calls[0][1][2] == "🎉"
 
 
+def test_react_paints_the_badge_before_the_wire_acks(store):
+    """Apple does not echo a reaction back to the sender, so the badge has
+    to appear from the act of sending or the desktop never shows it."""
+    store._message_model = None  # _refresh_reactions no-ops without a model
+    store._current = "them"
+    store.react(GUID, "Heart")
+    msg = store._threads["them"]["messages"][0]
+    assert msg["reactions"] == {"me": "❤️"}
+
+
+def test_react_emoji_paints_the_literal_emoji(store):
+    store._message_model = None
+    store._current = "them"
+    store.react(GUID, "🎉")
+    msg = store._threads["them"]["messages"][0]
+    assert msg["reactions"] == {"me": "🎉"}
+
+
 def test_reply_puts_body_before_the_target(store):
     """SendReply is (recipient, body, guid, target_text) — the odd one out.
 

@@ -8,7 +8,10 @@ the old single field meant the last reaction silently replaced the rest.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui.models import EmojiCompleter, MessageListModel, ThreadStore, reaction_emoji
+from iphonebridge.qtui.models import (
+    EmojiCompleter, MessageListModel, ThreadStore,
+    _kind_to_reaction_verb, _kind_to_removal_verb, reaction_emoji,
+)
 
 
 def _store() -> ThreadStore:
@@ -78,6 +81,24 @@ def test_a_removal_is_not_an_emoji():
     assert reaction_emoji("Removed a heart from") == ""
     assert reaction_emoji(None) == ""
     assert reaction_emoji("") == ""
+
+
+# ---- picker kind → verb --------------------------------------------------
+
+def test_classic_picker_kinds_become_verbs():
+    assert _kind_to_reaction_verb("Heart") == "Loved"
+    assert _kind_to_reaction_verb("Laugh") == "Laughed at"
+    assert _kind_to_reaction_verb("Emphasize") == "Emphasized"
+
+
+def test_emoji_picker_kind_becomes_reacted_verb():
+    assert _kind_to_reaction_verb("🎉") == "Reacted 🎉"
+    assert reaction_emoji(_kind_to_reaction_verb("🎉")) == "🎉"
+
+
+def test_removal_kinds_name_what_they_withdraw():
+    assert _kind_to_removal_verb("Heart") == "Removed a heart from"
+    assert _kind_to_removal_verb("🎉") == "Removed a reaction from"
 
 
 # ---- one message, several people ----------------------------------------
