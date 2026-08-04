@@ -88,20 +88,50 @@ def has_emoji(text: str) -> bool:
     return bool(_RUN.search(text))
 
 
-def markup(text: str, size: int) -> str:
-    """`text` as Qt rich text with emoji runs sized at `size` px.
+# Same shape as link_preview.extract_urls — kept local so this module stays
+# free of a cycle (link_preview imports config, emoji_text must not).
+_URL_RE = re.compile(
+    r"(https?://[^\s<>\"'\]\)\}>,]+)",
+    re.IGNORECASE,
+)
+_URL_TRAIL = ".,;:!?)]}'\"…"
 
-    Returns "" when there's nothing to mark up, so callers can fall back to
-    plain text and skip the rich-text layout entirely.
-    """
-    if not has_emoji(text):
+
+def _split_urls(text: str) -> list[tuple[str, bool]]:
+    """Segment `text` into [(piece, is_url), ...] preserving order."""
+    if not text:
+        return []
+    out: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _URL_RE.finditer(text):
+        raw = m.group(1)
+        url = raw.rstrip(_URL_TRAIL)
+        if not url:
+            continue
+        if m.start() > pos:
+            out.append((text[pos:m.start()], False))
+        out.append((url, True))
+        # Put stripped trailing punctuation back as plain text.
+        trail = raw[len(url):]
+        end = m.end()
+        if trail:
+            out.append((trail, False))
+        pos = end
+    if pos < len(text):
+        out.append((text[pos:], False))
+    return out if out else [(text, False)]
+
+
+def _markup_plain(text: str, size: int) -> str:
+    """Escape `text` and size any emoji runs; always returns a string."""
+    if not text:
         return ""
+    if not has_emoji(text):
+        return escape(text).replace("\n", "<br>")
 
     def wrap(m: re.Match[str]) -> str:
         return f'<span style="font-size:{size}px">{escape(m.group(0))}</span>'
 
-    # Escape around the runs rather than over the whole string: escaping
-    # first would leave &amp; entities inside the spans to re-escape.
     out: list[str] = []
     pos = 0
     for m in _RUN.finditer(text):
@@ -112,14 +142,51 @@ def markup(text: str, size: int) -> str:
     return "".join(out).replace("\n", "<br>")
 
 
-def body_markup(text: str, base_size: int) -> tuple[str, bool]:
+def markup(text: str, size: int, *, link_color: str | None = None) -> str:
+    """`text` as Qt rich text with emoji runs sized at `size` px.
+
+    Returns "" when there's nothing to mark up (no emoji, no URLs), so
+    callers can fall back to plain text and skip the rich-text layout.
+    When `link_color` is set, http(s) URLs become tappable anchors.
+    """
+    has_links = bool(_URL_RE.search(text or ""))
+    if not has_emoji(text) and not has_links:
+        return ""
+
+    if not has_links:
+        return _markup_plain(text, size)
+
+    # Link colour defaults to Messages-style blue; the caller overrides for
+    # outgoing bubbles where the body is white.
+    color = link_color or "#2f8fff"
+    chunks: list[str] = []
+    for piece, is_url in _split_urls(text):
+        if is_url:
+            href = escape(piece, quote=True)
+            label = escape(piece)
+            chunks.append(
+                f'<a href="{href}" style="color:{color};'
+                f'text-decoration:underline;">{label}</a>'
+            )
+        else:
+            chunks.append(_markup_plain(piece, size))
+    return "".join(chunks)
+
+
+def body_markup(
+    text: str, base_size: int, *, link_color: str | None = None
+) -> tuple[str, bool]:
     """Rich text and jumbo flag for a message body.
 
     The jumbo flag means "draw this without a bubble" — the caller still
-    needs to honour it, the markup only carries the size.
+    needs to honour it, the markup only carries the size. URLs are always
+    linkified when present so the bubble itself is tappable.
     """
     if is_emoji_only(text):
         n = emoji_count(text)
         size = JUMBO_SIZE if n <= JUMBO_MAX else JUMBO_SIZE_MANY
+        # Emoji-only never has a URL worth linkifying.
         return markup(text, size), True
-    return markup(text, round(base_size * INLINE_SCALE)), False
+    return markup(
+        text, round(base_size * INLINE_SCALE), link_color=link_color
+    ), False

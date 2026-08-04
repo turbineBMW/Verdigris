@@ -32,6 +32,13 @@ from iphonebridge.avatars import circular as circular_avatar
 from iphonebridge.contacts import ContactsResolver
 from iphonebridge.emoji_text import body_markup
 from iphonebridge.events import _detect_reaction, normalize_phone
+from iphonebridge.link_preview import (
+    STATUS_OK,
+    fetch_preview,
+    first_url,
+    load_cached,
+    preview_for_ui,
+)
 from iphonebridge.message_store import (
     DEFAULT_MESSAGE_PAGE,
     MessageStore,
@@ -49,6 +56,11 @@ from iphonebridge.qtui.util import (
     ts_epoch,
     ts_gap_seconds,
 )
+
+# Link colour on outgoing bubbles (white body text). Incoming uses the
+# default accent blue from emoji_text.markup.
+_LINK_COLOR_OUT = "#ffffff"
+_LINK_COLOR_IN = "#7ec8ff"
 
 log = logging.getLogger(__name__)
 
@@ -228,6 +240,32 @@ def reaction_emoji(verb: str | None) -> str:
     return ""
 
 
+def reaction_badges(reactions: dict | None) -> list[dict]:
+    """Project a message's `{reactor: emoji}` map into what the badge draws.
+
+    One entry per distinct emoji, in the order they were added. Three people
+    all sending ❤️ is one heart, not three identical badges — iOS counts them
+    instead, which needs a number this doesn't draw yet.
+
+    Each entry is `{"emoji": "❤️", "mine": bool}` so the QML disc can pick a
+    blue (mine) or grey (theirs) bubble without a second role.
+    """
+    if not reactions:
+        return []
+    # emoji → whether any of the reactors is me. First-seen order preserved.
+    order: list[str] = []
+    mine_for: dict[str, bool] = {}
+    for reactor, emoji in reactions.items():
+        if not emoji:
+            continue
+        if emoji not in mine_for:
+            order.append(emoji)
+            mine_for[emoji] = False
+        if reactor == "me":
+            mine_for[emoji] = True
+    return [{"emoji": e, "mine": mine_for[e]} for e in order]
+
+
 def _thread_key(ev: dict) -> str:
     return (ev.get("contact_name") or ev.get("sender_phone")
             or ev.get("sender_phone_norm") or "(unknown)")
@@ -241,6 +279,11 @@ _IMAGE_EXTS = frozenset({
     ".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif",
     ".webp", ".tif", ".tiff", ".bmp",
 })
+
+# Formats QML AnimatedImage can play as multi-frame. Static Image only ever
+# shows frame 0, which is why GIF stickers and reaction loops looked frozen.
+_ANIMATED_EXTS = frozenset({".gif"})
+_ANIMATED_MIMES = frozenset({"image/gif"})
 
 
 def _file_url(path: str | Path | None) -> str:
@@ -279,6 +322,25 @@ def _is_image_att(att: dict) -> bool:
     return ext in _IMAGE_EXTS
 
 
+def _is_animated_att(att: dict) -> bool:
+    """True when the attachment should play (GIF), not freeze on frame 0.
+
+    Mime first, then name/path extension — same fallback pattern as
+    `_is_image_att`, because live downloads sometimes omit mime until the
+    bytes land and backup rows occasionally ship a blank one.
+    """
+    mime = (att.get("mime") or att.get("mime_type") or "").lower()
+    if mime in _ANIMATED_MIMES:
+        return True
+    # Some servers send image/gif under a generic type with a .gif name.
+    if mime.startswith("image/") and mime.endswith("gif"):
+        return True
+    name = att.get("name") or ""
+    path = str(att.get("path") or "")
+    ext = Path(name).suffix.lower() or Path(path).suffix.lower()
+    return ext in _ANIMATED_EXTS
+
+
 def _inline_img_html(att: dict, height_px: int = _INLINE_MEDIA_PX) -> str:
     """Qt rich-text `<img>` for media sitting on a text line.
 
@@ -313,7 +375,11 @@ def _inline_candidate(att: dict) -> bool:
 
 
 def _body_with_inline_media(
-    body: str, atts: list[dict], *, height_px: int = _INLINE_MEDIA_PX
+    body: str,
+    atts: list[dict],
+    *,
+    height_px: int = _INLINE_MEDIA_PX,
+    outgoing: bool = False,
 ) -> tuple[str, str, bool, list[dict]]:
     """Split a message into bubble text and free-standing attachment rows.
 
@@ -325,14 +391,16 @@ def _body_with_inline_media(
     `(plain_body, rich_body, jumbo, free_standing_atts)`.
 
     `height_px` sizes inline images to the surrounding text — body vs reply
-    quote use different font sizes.
+    quote use different font sizes. `outgoing` picks the link colour so a
+    tappable URL stays readable on both blue and grey bubbles.
     """
     body = body or ""
+    link_color = _LINK_COLOR_OUT if outgoing else _LINK_COLOR_IN
     # No inline slots: free-standing attachments keep their rows; just scrub
     # the attributed-string placeholder out of the caption.
     if _INLINE_MEDIA not in body:
         plain = body.replace(_OBJ_REPLACEMENT, "")
-        rich, jumbo = body_markup(plain, height_px)
+        rich, jumbo = body_markup(plain, height_px, link_color=link_color)
         return plain, rich, jumbo, list(atts)
 
     queue = [a for a in atts if _inline_candidate(a)]
@@ -363,13 +431,13 @@ def _body_with_inline_media(
         return "", "", False, free
 
     if not used:
-        rich, jumbo = body_markup(plain, height_px)
+        rich, jumbo = body_markup(plain, height_px, link_color=link_color)
         return plain, rich, jumbo, free
 
     chunks: list[str] = []
     for kind, val in segments:
         if kind == "t":
-            em, _ = body_markup(val, height_px)
+            em, _ = body_markup(val, height_px, link_color=link_color)
             chunks.append(em if em else escape(val).replace("\n", "<br>"))
         else:
             chunks.append(_inline_img_html(val, height_px))
@@ -521,11 +589,12 @@ class MessageListModel(_DictListModel):
     BodyRole = Qt.ItemDataRole.UserRole + 1
     OutgoingRole = Qt.ItemDataRole.UserRole + 2
     DividerRole = Qt.ItemDataRole.UserRole + 4
-    # Tapbacks on this message, as the emoji themselves — ["❤️", "😂"], not
-    # verbs and not icon paths. A list because everyone in a thread can react
-    # to the same message, and one role covers both kinds of tapback: the six
-    # classic verbs map onto the same emoji the picker offers, and an iOS 18
-    # arbitrary emoji is already one. Empty for the great majority of messages.
+    # Tapbacks on this message. Each entry is {"emoji": "❤️", "mine": bool}
+    # so the badge can draw the disc colour (blue for mine, grey for theirs)
+    # and pick a tail direction from the message side. A list because everyone
+    # in a thread can react, and one role covers both kinds of tapback: the
+    # six classic verbs map onto the same emoji the picker offers, and an
+    # iOS 18 arbitrary emoji is already one. Empty for most messages.
     ReactionsRole = Qt.ItemDataRole.UserRole + 5
     MediaOnlyRole = Qt.ItemDataRole.UserRole + 6
     ImageRole = Qt.ItemDataRole.UserRole + 7
@@ -569,6 +638,15 @@ class MessageListModel(_DictListModel):
     # Paired with replyBody so the quote is tappable and can jump to the
     # original without re-resolving the target in QML.
     ReplyGuidRole = Qt.ItemDataRole.UserRole + 27
+    # Open-Graph card under a message that contains a URL. Empty strings
+    # until the background fetch lands (or forever, if the host is down).
+    LinkUrlRole = Qt.ItemDataRole.UserRole + 28
+    LinkTitleRole = Qt.ItemDataRole.UserRole + 29
+    LinkDescriptionRole = Qt.ItemDataRole.UserRole + 30
+    LinkSiteRole = Qt.ItemDataRole.UserRole + 31
+    LinkImageRole = Qt.ItemDataRole.UserRole + 32
+    # GIF (and similar) free-standing media — QML uses AnimatedImage when set.
+    AnimatedRole = Qt.ItemDataRole.UserRole + 33
 
     _ROLES = {
         BodyRole: "body",
@@ -597,6 +675,12 @@ class MessageListModel(_DictListModel):
         EventIdRole: "eventId",
         HighlightRole: "highlight",
         ReplyGuidRole: "replyGuid",
+        LinkUrlRole: "linkUrl",
+        LinkTitleRole: "linkTitle",
+        LinkDescriptionRole: "linkDescription",
+        LinkSiteRole: "linkSite",
+        LinkImageRole: "linkImage",
+        AnimatedRole: "animated",
     }
 
     # Identify a row by the message it came from plus its position within
@@ -753,6 +837,12 @@ class ThreadStore(QObject):
         # its guid was upgraded from a MAP-first copy). Applied when the
         # guid lands. Bounded in _apply_state.
         self._pending_receipts: dict[str, tuple[str, str]] = {}
+        # Edits/unsends that arrived before the target message was in
+        # `_by_guid` (thread not opened yet, or still paging). Applied in
+        # `_bind_guid` / hydrate. Without this, `_ingest_state` marked the
+        # state handle as seen, the open-thread hydrate skipped it, and the
+        # old text stuck until a full app restart.
+        self._pending_edits: dict[str, str] = {}
         # Whether the main window is the active (focused) window. Combined
         # with the open thread so the daemon can suppress popups for a
         # conversation that is already on screen — see setWindowFocused.
@@ -781,6 +871,15 @@ class ThreadStore(QObject):
         self._search_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="ib-search"
         )
+        # Link-preview fetches: a few in parallel so opening a chat full of
+        # Instagram/YouTube links doesn't serialise behind one slow host,
+        # but not so many we thrash the network on a long scroll.
+        self._link_pool = ThreadPoolExecutor(
+            max_workers=3, thread_name_prefix="ib-link"
+        )
+        # URLs already submitted this session — avoids re-queueing the same
+        # URL for every message that shares it (or every rebuild).
+        self._link_inflight: set[str] = set()
         self._highlight_event_id = 0
         # Guid of the bubble rim-highlighted by a reply-quote jump (search
         # uses event id; replies only always have a guid).
@@ -900,11 +999,9 @@ class ThreadStore(QObject):
     def _ingest_state(self, ev: dict, *, refresh: bool = True) -> None:
         """A `message_state` row from the message store (post-restart rebuild)."""
         handle = ev.get("handle") or ""
-        if handle:
-            if handle in self._seen_handles:
-                return
-            self._seen_handles.add(handle)
-        self._apply_state(
+        if handle and handle in self._seen_handles:
+            return
+        handled = self._apply_state(
             state=ev.get("state") or "",
             guid=ev.get("guid") or "",
             peer=ev.get("peer_handle") or ev.get("handle") or "",
@@ -912,6 +1009,11 @@ class ThreadStore(QObject):
             timestamp=ev.get("timestamp") or "",
             refresh=refresh,
         )
+        # Only mark seen when the state was applied or queued. Marking a
+        # failed edit as seen made the open-thread hydrate skip it forever,
+        # so the correction only appeared after a full app restart.
+        if handle and handled:
+            self._seen_handles.add(handle)
 
     def _apply_state(
         self,
@@ -922,21 +1024,22 @@ class ThreadStore(QObject):
         body: str,
         timestamp: str,
         refresh: bool,
-    ) -> None:
-        """Delivery/read/typing/edit. Updates a message rather than adding one."""
+    ) -> bool:
+        """Delivery/read/typing/edit. Updates a message rather than adding one.
+
+        Returns True when the event was handled (applied or queued) so the
+        disk path can mark its handle as seen.
+        """
         if state in ("typing", "typing_stopped"):
             self._set_typing(peer, state == "typing")
-            return
+            return True
 
         # An edit or unsend we made ourselves. Apple doesn't echo these back
         # to the device that sent them, so the daemon reports them locally
         # instead — otherwise the desktop is the one place that never sees
         # its own edit. Same path as a remote Edit event once it hits disk.
         if state in ("edited", "unsent"):
-            if self._apply_edit({"edited_from_guid": guid}, body):
-                if refresh and self._current:
-                    self._rebuild_messages()
-            return
+            return self._apply_edit_state(guid, body, refresh=refresh)
 
         # An incoming message's attachments, once the daemon has fetched the
         # bytes. They arrive after the message because iMessage delivers them
@@ -945,17 +1048,17 @@ class ThreadStore(QObject):
         if state == "attachments":
             msg = self._by_guid.get(guid)
             if msg is None:
-                return
+                return False
             try:
                 atts = json.loads(body) if body else []
             except json.JSONDecodeError:
                 log.warning("bad attachment payload for %s", guid)
-                return
+                return True
             # Only entries that actually landed on disk; a failed download
             # leaves the message as it was rather than drawing a broken image.
             atts = [a for a in atts if a.get("path")]
             if not atts:
-                return
+                return True
             msg["attachments"] = atts
             # The bridge puts "[name.png]" in the body when a message is
             # nothing but an attachment, so there's something to show before
@@ -965,14 +1068,14 @@ class ThreadStore(QObject):
             placeholders = {f"[{a.get('name')}]" for a in atts}
             if (msg.get("body") or "") in placeholders:
                 msg["body"] = ""
-            if refresh and self._current:
+            if refresh and self._message_in_current(msg):
                 self._rebuild_messages()
-            return
+            return True
 
         if state not in ("delivered", "read"):
-            return
+            return True
         if not guid:
-            return
+            return True
 
         msg = self._by_guid.get(guid)
         if msg is None:
@@ -982,14 +1085,14 @@ class ThreadStore(QObject):
             # got a Delivered caption.
             prev = self._pending_receipts.get(guid)
             if prev and prev[0] == "read" and state == "delivered":
-                return
+                return True
             self._pending_receipts[guid] = (state, timestamp)
             if len(self._pending_receipts) > 512:
                 for old in list(self._pending_receipts)[:128]:
                     self._pending_receipts.pop(old, None)
-            return
+            return True
         if not self._stamp_receipt(msg, state, timestamp):
-            return
+            return True
 
         # Recompute captions if this message is in the open thread. Find the
         # owner by identity rather than assuming `_current` — live sends can
@@ -997,18 +1100,65 @@ class ThreadStore(QObject):
         # the user is staring at only if we never merge, but more often the
         # receipt just needs a reliable repaint.
         if not refresh:
-            return
-        owner = None
-        for thread in self._threads.values():
-            if msg in thread["messages"]:
-                owner = thread
-                break
-        if owner is None or owner.get("key") != self._current:
-            return
+            return True
+        if not self._message_in_current(msg):
+            return True
         # Captions only rewrite two string roles — never the row set. A full
         # rebuild here used to re-estimate contentHeight and jolt the scroll
         # on every Delivered/Read.
         self._refresh_captions()
+        return True
+
+    def _apply_edit_state(self, guid: str, body: str, *, refresh: bool) -> bool:
+        """Apply an edit/unsend, or queue it until the target message loads."""
+        if not guid:
+            return True
+        if self._apply_edit({"edited_from_guid": guid}, body):
+            self._refresh_after_edit(guid, body, refresh=refresh)
+            return True
+        # Target not in memory yet (conversation not opened / not paged in).
+        # Hold the new text and apply when the guid is bound.
+        pending = getattr(self, "_pending_edits", None)
+        if pending is None:
+            self._pending_edits = {}
+            pending = self._pending_edits
+        pending[guid] = body
+        if len(pending) > 512:
+            for old in list(pending)[:128]:
+                pending.pop(old, None)
+        return True
+
+    def _refresh_after_edit(
+        self, guid: str, body: str, *, refresh: bool
+    ) -> None:
+        """Repaint the open chat and sidebar preview after a body rewrite."""
+        msg = self._by_guid.get(guid)
+        if msg is None:
+            return
+        owner = None
+        for thread in self._threads.values():
+            if msg in (thread.get("messages") or []):
+                owner = thread
+                break
+        if owner is not None:
+            msgs = owner.get("messages") or []
+            if msgs and msgs[-1] is msg:
+                owner["last_preview"] = (body or "").replace("\n", " ")[:200]
+                # `_refresh_pending` is created in __init__; unit tests that
+                # construct via __new__ leave it off — skip the sidebar paint.
+                if refresh and getattr(self, "_refresh_pending", None) is not None:
+                    self._refresh_threads()
+        if refresh and self._message_in_current(msg):
+            self._rebuild_messages()
+
+    def _message_in_current(self, msg: dict) -> bool:
+        """True when `msg` is in the conversation currently on screen."""
+        if not self._current:
+            return False
+        thread = self._threads.get(self._current)
+        if thread is None:
+            return False
+        return msg in (thread.get("messages") or [])
 
     @staticmethod
     def _stamp_receipt(msg: dict, state: str, timestamp: str) -> bool:
@@ -1024,7 +1174,7 @@ class ThreadStore(QObject):
         return True
 
     def _bind_guid(self, msg: dict, guid: str) -> None:
-        """Attach a guid and any receipt that was waiting on it."""
+        """Attach a guid and any receipt/edit that was waiting on it."""
         if not guid:
             return
         msg["guid"] = guid
@@ -1032,6 +1182,15 @@ class ThreadStore(QObject):
         pending = self._pending_receipts.pop(guid, None)
         if pending is not None:
             self._stamp_receipt(msg, pending[0], pending[1])
+        # An edit that arrived while this message wasn't loaded — apply now
+        # so opening the thread shows the corrected text without a restart.
+        pending_edits = getattr(self, "_pending_edits", None)
+        if pending_edits is None:
+            self._pending_edits = {}
+            pending_edits = self._pending_edits
+        edit_body = pending_edits.pop(guid, None)
+        if edit_body is not None:
+            self._apply_edit({"edited_from_guid": guid}, edit_body)
 
     def _live_content_twin(
         self,
@@ -2253,10 +2412,21 @@ class ThreadStore(QObject):
             thread["has_older"] = False
 
         # Apply delivery/edit/attachment state for guids we loaded.
+        # Call `_apply_state` directly — not `_ingest_state` — so a state
+        # handle that was marked seen while the target wasn't loaded (or
+        # only queued as pending) still rewrites the freshly materialised
+        # bubbles. Skipping here is what made edits wait for an app restart.
         guids = [m.get("guid") for m in thread["messages"] if m.get("guid")]
         try:
             for st in self._db.states_for_guids(guids):
-                self._ingest_state(st, refresh=False)
+                self._apply_state(
+                    state=st.get("state") or "",
+                    guid=st.get("guid") or "",
+                    peer=st.get("peer_handle") or st.get("handle") or "",
+                    body=st.get("body") or "",
+                    timestamp=st.get("timestamp") or "",
+                    refresh=False,
+                )
         except Exception:
             log.exception("state hydrate failed for %s", key)
 
@@ -2360,7 +2530,9 @@ class ThreadStore(QObject):
             }
             if guid:
                 local_by_guid[guid] = msg
-                self._by_guid[guid] = msg
+                # Via `_bind_guid` so a pending edit/receipt that arrived
+                # before this page loaded rewrites the bubble now.
+                self._bind_guid(msg, guid)
                 seen_guids.add(guid)
             built.append(msg)
             self._note_message(thread, msg)
@@ -2490,7 +2662,7 @@ class ThreadStore(QObject):
             thread["last_ts"] = ts
             thread["last_preview"] = body.replace("\n", " ")[:200]
         if guid:
-            self._by_guid[guid] = msg
+            self._bind_guid(msg, guid)
         self._seen_handles.add(handle)
         return True
 
@@ -2808,20 +2980,21 @@ class ThreadStore(QObject):
                 prev.get("ts"), msg.get("ts")) >= _RUN_GAP_SECONDS:
             gap_before = _RUN_GAP_PX
 
-        # One badge per distinct emoji, in the order they were added. Three
-        # people all sending ❤️ is one heart on the bubble, not three
-        # identical badges — iOS counts them instead, which needs a number
-        # this doesn't draw yet.
-        reactions = list(dict.fromkeys(
-            (msg.get("reactions") or {}).values()))
+        # One badge per distinct emoji (+ mine flag for blue vs grey disc).
+        # See reaction_badges().
+        reactions = reaction_badges(msg.get("reactions"))
 
         outgoing = bool(msg["outgoing"])
         atts = msg.get("attachments") or []
         # U+F00A slots become `<img>` tags inside the bubble; free-standing
         # stickers/photos (and U+FFFC Bitmoji) still get their own rows.
         body, rich_body, jumbo, free_atts = _body_with_inline_media(
-            msg.get("body") or "", atts)
+            msg.get("body") or "", atts, outgoing=outgoing)
         body = body.strip()
+        # First URL in the body drives the Open Graph card under the bubble.
+        # Cached hits fill in immediately; misses schedule a background fetch
+        # that patches the row when it lands (see `_schedule_link_preview`).
+        link = self._link_fields_for(body)
         # Defense in depth for the bridge's `[name.png]` placeholder: if the
         # body is exactly that and we have a real attachment (with or without
         # bytes yet), don't also draw a filename caption under the media.
@@ -2872,7 +3045,7 @@ class ThreadStore(QObject):
                     "mediaOnly": False, "image": "", "fileLabel": "",
                     "sender": "", "senderAvatar": "", "senderInitials": "",
                     "tail": False, "richBody": "", "jumbo": False,
-                    "imageW": 0, "imageH": 0,
+                    "imageW": 0, "imageH": 0, "animated": False,
                     "guid": msg.get("guid") or "", "deliveryState": "",
                     "deliveryStamp": "", "gapBefore": 0,
                     "timeStamp": clock_ts(msg.get("ts")),
@@ -2898,7 +3071,11 @@ class ThreadStore(QObject):
                             and (msg.get("guid") or "")
                             == getattr(self, "_highlight_guid", "")
                         )
-                    )}
+                    ),
+                    # Open Graph card. Empty on media-only rows; filled on
+                    # the text row when the body carries a URL.
+                    "linkUrl": "", "linkTitle": "", "linkDescription": "",
+                    "linkSite": "", "linkImage": ""}
 
         rows: list[dict] = []
         for att in free_atts:
@@ -2918,6 +3095,7 @@ class ThreadStore(QObject):
                 r["fileLabel"] = name
                 r["imageW"] = int(att.get("w") or 0)
                 r["imageH"] = int(att.get("h") or 0)
+                r["animated"] = _is_animated_att(att)
             elif _is_image_att(att) and url:
                 # HEIC included — Qt decodes it via libheif on this system.
                 r = base_row("image")
@@ -2925,6 +3103,7 @@ class ThreadStore(QObject):
                 r["fileLabel"] = name
                 r["imageW"] = int(att.get("w") or 0)
                 r["imageH"] = int(att.get("h") or 0)
+                r["animated"] = _is_animated_att(att)
             elif mime.startswith("video/"):
                 # Image can't render video; offer it as a playable file.
                 r = base_row("file")
@@ -2948,12 +3127,15 @@ class ThreadStore(QObject):
             r["body"] = body
             # Emoji need their own font-size to not look shrunken next to
             # the text; stickers land as `<img>` tags in the same rich body.
-            # An emoji-only message drops its bubble entirely.
+            # An emoji-only message drops its bubble entirely. URLs are
+            # linkified here too so the bubble itself is tappable.
             r["richBody"] = rich_body
             r["jumbo"] = jumbo
             # No attachment and no text: media the phone never handed over
             # (MAP strips it), so say that instead of drawing a blank bubble.
             r["mediaOnly"] = not body and not atts
+            # Card sits under the text bubble, never under a photo row.
+            r.update(link)
             rows.append(r)
 
         # Divider belongs to the first row; the tapback to the last, so it
@@ -3015,7 +3197,7 @@ class ThreadStore(QObject):
         caption). Matching by message identity in `rowKey` keeps us correct
         even when the guid is still empty.
         """
-        reactions = list(dict.fromkeys((msg.get("reactions") or {}).values()))
+        reactions = reaction_badges(msg.get("reactions"))
         prefix = f"{id(msg)}-"
         rows = self._message_model.rows()
         if not rows:
@@ -3056,6 +3238,103 @@ class ThreadStore(QObject):
             idx,
             [MessageListModel.ReactionsRole],
         )
+
+    def _link_fields_for(self, body: str) -> dict[str, str]:
+        """Open Graph fields for a message body, scheduling a fetch if needed.
+
+        Cache hits return immediately with title/image. Misses return empty
+        fields and kick a worker; when it finishes `_apply_link_preview`
+        patches every visible row that shares that URL. Image paths are
+        already `file://` URLs so QML Image can load them directly.
+        """
+        empty = {
+            "linkUrl": "", "linkTitle": "", "linkDescription": "",
+            "linkSite": "", "linkImage": "",
+        }
+        url = first_url(body)
+        if not url:
+            return empty
+        cached = load_cached(url)
+        if cached is not None:
+            fields = preview_for_ui(cached)
+            # Even a failed cache entry keeps the URL so the card can at
+            # least open the link (and so we don't re-fetch forever).
+            if not fields["linkUrl"]:
+                fields["linkUrl"] = url
+            if fields["linkImage"]:
+                fields["linkImage"] = _file_url(fields["linkImage"])
+            return fields
+        self._schedule_link_preview(url)
+        return {
+            "linkUrl": url, "linkTitle": "", "linkDescription": "",
+            "linkSite": "", "linkImage": "",
+        }
+
+    def _schedule_link_preview(self, url: str) -> None:
+        if not url or url in self._link_inflight:
+            return
+        # Another message may already have cached it between the miss check
+        # and now (same rebuild loop). Re-check cheaply.
+        if load_cached(url) is not None:
+            return
+        self._link_inflight.add(url)
+
+        def work() -> dict:
+            return fetch_preview(url)
+
+        fut = self._link_pool.submit(work)
+
+        def done(f: Future) -> None:
+            try:
+                entry = f.result()
+            except Exception:
+                log.exception("link preview worker failed for %s", url)
+                entry = {"url": url, "status": "fail"}
+            # Back on the GUI thread: models aren't thread-safe.
+            QTimer.singleShot(
+                0, lambda e=entry, u=url: self._apply_link_preview(u, e)
+            )
+
+        fut.add_done_callback(done)
+
+    def _apply_link_preview(self, url: str, entry: dict) -> None:
+        """Patch visible message rows that preview `url` once the fetch lands."""
+        self._link_inflight.discard(url)
+        fields = preview_for_ui(entry)
+        if not fields["linkUrl"]:
+            fields["linkUrl"] = url
+        # Nothing useful and no image — leave the bare URL in place without
+        # a card. Still mark linkUrl so a re-open doesn't re-fetch.
+        if entry.get("status") != STATUS_OK and not fields["linkTitle"]:
+            return
+
+        rows = self._message_model._rows
+        roles = [
+            MessageListModel.LinkUrlRole,
+            MessageListModel.LinkTitleRole,
+            MessageListModel.LinkDescriptionRole,
+            MessageListModel.LinkSiteRole,
+            MessageListModel.LinkImageRole,
+        ]
+        for i, row in enumerate(rows):
+            if (row.get("linkUrl") or "") != url:
+                continue
+            # Already painted with the same title (cache race) — skip.
+            if (row.get("linkTitle") or "") == (fields["linkTitle"] or "") and (
+                row.get("linkImage") or ""
+            ) == (fields["linkImage"] or ""):
+                # Still copy description/site in case only those differ.
+                if (row.get("linkDescription") == fields["linkDescription"]
+                        and row.get("linkSite") == fields["linkSite"]):
+                    continue
+            row["linkUrl"] = fields["linkUrl"]
+            row["linkTitle"] = fields["linkTitle"]
+            row["linkDescription"] = fields["linkDescription"]
+            row["linkSite"] = fields["linkSite"]
+            row["linkImage"] = _file_url(fields["linkImage"]) if fields[
+                "linkImage"] else ""
+            idx = self._message_model.index(i, 0)
+            self._message_model.dataChanged.emit(idx, idx, roles)
 
     def _rebuild_messages(self) -> None:
         thread = self._threads.get(self._current)
@@ -3408,13 +3687,13 @@ class ThreadStore(QObject):
     @Slot(str)
     def send(self, body: str) -> None:
         body = body.strip()
-        thread = self._threads.get(self._current)
-        if not body or thread is None:
+        peer = self._peer()
+        if not body or not peer:
             return
         # The outgoing bubble is added when the daemon's MessageSent signal
         # arrives — no optimistic append, so there's no chance of a duplicate.
         self._client.send_message(
-            thread["phone"], body,
+            peer, body,
             lambda _t: None,
             lambda text: log.warning("send failed: %s", text))
 
@@ -3425,8 +3704,28 @@ class ThreadStore(QObject):
     # re-check anyway, since a stale delegate could outlive the check.
 
     def _peer(self) -> str | None:
+        """Recipient string for Send / reply / react / etc.
+
+        1:1 threads use the peer phone. Groups have no single phone — their
+        identity is the participant set on `imessage-group:…` — so we hand
+        the daemon that set as a comma-separated list (same form as
+        notification inline reply). Returning None here used to make every
+        group action no-op silently: reply looked broken, send never left.
+        """
         thread = self._threads.get(self._current or "")
-        return thread["phone"] if thread else None
+        if not thread:
+            return None
+        phone = thread.get("phone")
+        if phone:
+            return phone
+        key = thread.get("key") or ""
+        # Matches `GROUP_KEY_PREFIX` in imessage.handles — kept inline so
+        # this path stays import-light for the UI process.
+        prefix = "imessage-group:"
+        if key.startswith(prefix):
+            parts = key[len(prefix):]
+            return parts or None
+        return None
 
     def _act(self, what: str, fn, *args) -> None:
         peer = self._peer()
@@ -3502,12 +3801,21 @@ class ThreadStore(QObject):
         new_text = new_text.strip()
         if not guid or not new_text:
             return
+        # Paint the new text immediately. Apple never echoes an edit back to
+        # the device that sent it, so without this the bubble keeps the old
+        # text until the daemon's local state signal arrives — and if that
+        # signal is delayed or the target wasn't yet in `_by_guid`, until a
+        # full restart. Same trade-off as `react`.
+        if self._apply_edit({"edited_from_guid": guid}, new_text):
+            self._refresh_after_edit(guid, new_text, refresh=True)
         self._act("edit", self._client.edit_message, guid, new_text)
 
     @Slot(str)
     def unsendMessage(self, guid: str) -> None:
         if not guid:
             return
+        if self._apply_edit({"edited_from_guid": guid}, "[message unsent]"):
+            self._refresh_after_edit(guid, "[message unsent]", refresh=True)
         self._act("unsend", self._client.unsend_message, guid)
 
     @Slot(bool)

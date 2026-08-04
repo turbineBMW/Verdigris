@@ -51,6 +51,55 @@ QtObject {
         return Qt.resolvedUrl("../../assets/icons/" + name + ".svg")
     }
 
+    // Classic six tapbacks — glossy PNGs under assets/reactions/<Name>.png.
+    // `name` is Heart / ThumbsUp / ThumbsDown / Haha / Emphasize / Question.
+    function reactionUrl(name) {
+        return Qt.resolvedUrl("../../assets/reactions/" + name + ".png")
+    }
+
+    // Map a badge emoji (from reaction_emoji / the classic table) onto a
+    // reaction PNG. Empty string for arbitrary iOS 18 emoji tapbacks so the
+    // badge falls back to drawing the character itself.
+    function classicReactionUrl(emoji) {
+        if (!emoji)
+            return ""
+        // Strip variation selectors so ❤ / ❤️ and ‼ / ‼️ match the same keys.
+        var e = ("" + emoji).replace(/\uFE0F/g, "")
+        if (e === "❤" || e === "♥")
+            return reactionUrl("Heart")
+        if (e === "👍")
+            return reactionUrl("ThumbsUp")
+        if (e === "👎")
+            return reactionUrl("ThumbsDown")
+        if (e === "😂" || e === "😆")
+            return reactionUrl("Haha")
+        if (e === "‼" || e === "❗")
+            return reactionUrl("Emphasize")
+        if (e === "❓" || e === "❔")
+            return reactionUrl("Question")
+        return ""
+    }
+
+    // Disc behind a tapback. Blue when I sent it, grey when someone else did.
+    // The tail always faces *away* from the message it sits on: left-tail on
+    // outgoing (badge is on the message's left edge), right-tail on incoming.
+    // Assets: assets/reactions/bubble-{left,right}-{blue,grey}.svg
+    function reactionBubbleUrl(outgoingMessage, mine) {
+        var side = outgoingMessage ? "left" : "right"
+        var color = mine ? "blue" : "grey"
+        return Qt.resolvedUrl(
+            "../../assets/reactions/bubble-" + side + "-" + color + ".svg")
+    }
+
+    // Main-circle centre of the bubble SVG (viewBox 117×115), as a fraction
+    // of the painted size. The glyph sits on this point, not the SVG midpoint,
+    // so it stays centred in the disc when the tail shifts the mass.
+    // right-tail: centre (51, 51); left-tail: centre (66, 51).
+    function reactionGlyphXFrac(outgoingMessage) {
+        return outgoingMessage ? (66 / 117) : (51 / 117)
+    }
+    readonly property real reactionGlyphYFrac: 51 / 115
+
     // Format → Bigger / Smaller. Multiplies message body text only, the way
     // Messages.app's text-size control does — chrome and timestamps keep
     // their size so the layout doesn't drift.
@@ -74,8 +123,11 @@ QtObject {
     // Press/dismiss and other micro motion that should feel snappier than
     // animFast — menu exit, clear-button pop, chip press recovery.
     readonly property int animMicro: reducedMotion ? 1 : 90
-    // Bubble-menu enter scale and emoji-chip hover growth. At 1.0 under
-    // reduced motion so scale pops become no-ops rather than jarring jumps.
+    // Bubble-menu enter scale. At 1.0 under reduced motion so scale pops
+    // become no-ops rather than jarring jumps.
     readonly property real popScale: reducedMotion ? 1.0 : 0.92
-    readonly property real hoverScale: reducedMotion ? 1.0 : 1.12
+    // Always 1.0: hover must not scale UI elements. Kept as a named token so
+    // any leftover references compile; do not reintroduce growth-on-hover
+    // (see AGENTS.md).
+    readonly property real hoverScale: 1.0
 }

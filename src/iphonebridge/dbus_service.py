@@ -183,10 +183,22 @@ class MessagesService(dbus.service.Object):
         # than an obex transfer path; both are opaque handles to the caller,
         # and the guid is the more useful of the two because later events
         # (delivery, read, tapbacks) reference it.
+        # Group recipient = comma-separated handles (and/or imessage-group:…).
+        # MAP can only address one phone; never fall through to it for groups
+        # or we "succeed" with a transfer that never reaches the chat.
+        multi = "," in recipient or recipient.strip().startswith(
+            "imessage-group:"
+        )
+
         if self.imessage is not None:
             try:
                 guid = self._imessage_send(recipient, body)
             except Exception as e:
+                if multi:
+                    log.exception("iMessage group send failed")
+                    raise dbus.exceptions.DBusException(
+                        str(e), name="com.gabriel.iphonebridge.Error.SendFailed"
+                    )
                 # Fall through to MAP rather than failing: a send that goes out
                 # over Bluetooth is better than one that doesn't go out. The
                 # common cause is an expired registration, and MAP is
@@ -198,6 +210,13 @@ class MessagesService(dbus.service.Object):
                 self._read_receipt_on_send(recipient)
                 self._record(recipient, body, guid)
                 return guid
+
+        if multi:
+            raise dbus.exceptions.DBusException(
+                "group send needs the iMessage helper "
+                "(iphonebridge-imessage.service)",
+                name="com.gabriel.iphonebridge.Error.NotReady",
+            )
 
         if self.sessions.map is None:
             raise dbus.exceptions.DBusException(
@@ -251,16 +270,21 @@ class MessagesService(dbus.service.Object):
         return self.imessage
 
     def _imessage_send(self, recipient: str, body: str) -> str:
-        from iphonebridge.imessage.handles import to_handle
-
-        return self.imessage.send([to_handle(recipient)], body)
+        # Same multi-recipient split as SendReply/React: a group is a
+        # comma-separated participant list. The old single to_handle() call
+        # treated the whole list as one address and groups never sent.
+        return self.imessage.send(self._participants(recipient), body)
 
     def _participants(self, recipient: str) -> list[str]:
-        from iphonebridge.imessage.handles import to_handle
+        from iphonebridge.imessage.handles import GROUP_KEY_PREFIX, to_handle
 
         # A comma-separated recipient addresses a group; that's how the CLI
-        # and UI already express multiple recipients.
-        return [to_handle(r) for r in recipient.split(",") if r.strip()]
+        # and UI already express multiple recipients. Also accept a full
+        # `imessage-group:…` key (strip the prefix) so either form works.
+        value = (recipient or "").strip()
+        if value.startswith(GROUP_KEY_PREFIX):
+            value = value[len(GROUP_KEY_PREFIX):]
+        return [to_handle(r) for r in value.split(",") if r.strip()]
 
     def _read_receipt_on_send(self, recipient: str) -> None:
         """Tell the sender we've read the thread, because we just replied to it.

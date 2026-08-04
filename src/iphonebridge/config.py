@@ -96,6 +96,28 @@ only one of them is governed by this flag:
     Only reached via a successful send; see `_read_receipt_on_send`.
 """
 
+# ---- desktop notifications ----------------------------------------------
+
+def _env_nonneg_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+NOTIFICATION_TIMEOUT_SEC: int = _env_nonneg_int(
+    "IPHONEBRIDGE_NOTIFICATION_TIMEOUT_SEC", 15)
+"""Seconds desktop message popups stay on screen before auto-dismissing.
+
+0 = never expire (previous behavior). Incoming-call popups always stay
+until answered or ended, regardless of this value. Auto-expiry does not
+mark the message read on the iPhone — only a manual dismiss does that.
+"""
+
 # ---- runtime paths ------------------------------------------------------
 
 _state_home = Path(

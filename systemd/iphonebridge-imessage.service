@@ -1,6 +1,6 @@
 [Unit]
-Description=iphonebridge iMessage transport (ib-imessage)
-Documentation=https://github.com/gabrielmeir53/iphonebridge
+Description=Blue iMessage transport (ib-imessage)
+Documentation=https://github.com/gutbash/blue
 # Needs the network to reach Apple's APNs/IDS, and the runtime dir for its
 # socket. Nothing Bluetooth-related: this transport talks to Apple directly,
 # not to the phone, which is the whole point of it.

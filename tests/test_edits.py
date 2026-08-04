@@ -26,6 +26,8 @@ def store():
     s._unsorted = set()
     s._current = ""
     s._read_marks = {}
+    s._pending_receipts = {}
+    s._pending_edits = {}
     return s
 
 
@@ -162,6 +164,71 @@ def test_our_own_unsend_updates_our_own_copy():
                         "body": "[message unsent]", "handle": "+12155550150"})
 
     assert only_thread(s)["messages"][0]["body"] == "[message unsent]"
+
+
+def test_edit_before_message_is_loaded_applies_when_guid_binds():
+    """An edit that races ahead of the bubble must not be dropped.
+
+    The previous path marked the state handle as seen even when the target
+    wasn't in `_by_guid`, so opening the conversation later skipped hydrate
+    and the old text stuck until a full app restart.
+    """
+    s = store()
+    # Edit arrives first — no message to rewrite yet.
+    s._on_state_signal({"guid": "A", "state": "edited",
+                        "body": "see you at 6", "handle": "+12155550150"})
+    assert "A" in s._pending_edits
+
+    s._ingest_backup(message("A", "see you at 5"))
+    # Backup ingest binds the guid; pending edit must land on the bubble.
+    msg = only_thread(s)["messages"][0]
+    assert msg["body"] == "see you at 6"
+    assert msg["edits"] == ["see you at 5"]
+    assert "A" not in s._pending_edits
+
+
+def test_failed_edit_is_not_marked_seen_so_hydrate_can_retry():
+    """Disk ingest must not burn the state handle when apply can't run."""
+    s = store()
+    # No target message yet — apply queues, and seen is only set after.
+    s._ingest_state({
+        "handle": "state:A:edited:t1",
+        "guid": "A",
+        "state": "edited",
+        "body": "v2",
+        "peer_handle": "+12155550150",
+    }, refresh=False)
+    # Queued counts as handled, so the handle is seen — but the body is in
+    # pending_edits, which `_bind_guid` applies. (Hydrate also re-applies
+    # via `_apply_state` directly, bypassing seen.)
+    assert "A" in s._pending_edits
+
+    msg = {"body": "v1", "guid": "", "edits": [], "outgoing": True,
+           "reactions": {}, "attachments": [], "ts": "2026-07-30T12:00:00+00:00",
+           "sender_name": "", "sender_phone": "", "state": ""}
+    s._bind_guid(msg, "A")
+    assert msg["body"] == "v2"
+    assert msg["edits"] == ["v1"]
+
+
+def test_live_edit_rebuilds_open_conversation_model():
+    """Editing while the thread is on screen must repaint the bubble."""
+    from iphonebridge.qtui.models import MessageListModel
+
+    s = store()
+    s._message_model = MessageListModel()
+    s._ingest_backup(message("A", "see you at 5"))
+    thread = only_thread(s)
+    key = next(iter(s._threads))
+    thread["key"] = key
+    s._current = key
+    s._rebuild_messages()
+    assert s._message_model.rows()[0]["body"] == "see you at 5"
+
+    s._on_state_signal({"guid": "A", "state": "edited",
+                        "body": "see you at 6", "handle": "+12155550150"})
+    assert s._message_model.rows()[0]["body"] == "see you at 6"
+    assert s._message_model.rows()[0]["edits"] == ["see you at 5"]
 
 
 # ---- replies are visibly replies ---------------------------------------

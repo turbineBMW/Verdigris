@@ -181,7 +181,7 @@ class Daemon:
             signal.signal(sig, self._signal)
 
         if not self._post_sessions_done:
-            log.warning("=== iphonebridge running in DEGRADED mode ===")
+            log.warning("=== Blue running in DEGRADED mode ===")
             log.warning("    No MAP/PBAP session yet. Retrying every %ds.",
                         SESSION_RETRY_SEC)
         # The "ready" line in the happy path is emitted by

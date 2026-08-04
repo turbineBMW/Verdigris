@@ -42,15 +42,8 @@ Item {
                 color: modelData.c
                 antialiasing: true
                 opacity: lightHover.hovered ? 1.0 : 0.9
-                scale: lightHover.hovered ? 1.1 : 1.0
                 Behavior on opacity {
                     NumberAnimation { duration: Theme.animFast }
-                }
-                Behavior on scale {
-                    NumberAnimation {
-                        duration: Theme.animFast
-                        easing.type: Easing.OutCubic
-                    }
                 }
                 HoverHandler { id: lightHover }
                 MouseArea {
@@ -79,7 +72,8 @@ Item {
         // Accessible name for the global-menu-style page picker.
         Accessible.name: "Menu"
         onClicked: pageMenu.popup(menuButton, 0, menuButton.height)
-        scale: down ? 0.94 : (hovered ? 1.05 : 1.0)
+        // Press shrink only — no hover scale (see AGENTS.md).
+        scale: down ? 0.94 : 1.0
         Behavior on scale {
             NumberAnimation {
                 duration: Theme.animFast

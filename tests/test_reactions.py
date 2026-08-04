@@ -1,16 +1,17 @@
 """Every tapback reaches the bubble as an emoji, and a message holds all of them.
 
-The badge used to be one of six hand-drawn SVGs, which left iOS 18's
-arbitrary-emoji tapbacks to borrow an empty bubble and paint the emoji into a
-hole measured off the artwork. One emoji list covers both kinds now — and it
-is a list because everyone in a thread can react to the same message, where
-the old single field meant the last reaction silently replaced the rest.
+Each badge is `{emoji, mine}` so the disc can be blue (mine) or grey (theirs)
+with a tail that faces away from the message. One list covers both the six
+classic verbs and iOS 18's arbitrary-emoji tapbacks — and it is a list because
+everyone in a thread can react to the same message, where the old single field
+meant the last reaction silently replaced the rest.
 """
 from __future__ import annotations
 
 from iphonebridge.qtui.models import (
     EmojiCompleter, MessageListModel, ThreadStore,
-    _kind_to_reaction_verb, _kind_to_removal_verb, reaction_emoji,
+    _kind_to_reaction_verb, _kind_to_removal_verb, reaction_badges,
+    reaction_emoji,
 )
 
 
@@ -30,9 +31,13 @@ def _msg(**kw) -> dict:
     return m
 
 
-def _badges(msg: dict) -> list[str]:
-    """What the delegate would draw, in order."""
+def _badges(msg: dict) -> list[dict]:
+    """What the delegate would draw, in order — `[{emoji, mine}, …]`."""
     return _store()._rows_for(msg, None)[-1]["reactions"]
+
+
+def _emoji(msg: dict) -> list[str]:
+    return [b["emoji"] for b in _badges(msg)]
 
 
 def _reacted(*pairs: tuple[str, str], **kw) -> dict:
@@ -108,55 +113,55 @@ def test_no_reaction_is_the_normal_case():
 
 
 def test_one_reaction_draws_one_badge():
-    assert _badges(_reacted(("Loved", "aiden"))) == ["❤️"]
+    assert _emoji(_reacted(("Loved", "aiden"))) == ["❤️"]
 
 
 def test_two_people_both_get_a_badge():
     m = _reacted(("Loved", "aiden"), ("Laughed at", "rey"))
-    assert _badges(m) == ["❤️", "😂"]
+    assert _emoji(m) == ["❤️", "😂"]
 
 
 def test_the_newest_reaction_goes_last():
     """The delegate overlaps the badges and later siblings paint on top, so
     row order is what puts the newest reaction at the front of the stack."""
     m = _reacted(("Loved", "aiden"), ("Reacted 🔥", "rey"))
-    assert _badges(m)[-1] == "🔥"
+    assert _emoji(m)[-1] == "🔥"
 
 
 def test_one_person_holds_one_reaction():
     """Reacting again replaces what they had — two badges from one person is
     not a thing iMessage can express."""
     m = _reacted(("Loved", "aiden"), ("Laughed at", "aiden"))
-    assert _badges(m) == ["😂"]
+    assert _emoji(m) == ["😂"]
 
 
 def test_the_same_emoji_from_two_people_is_one_badge():
     """iOS draws a count instead; three identical hearts in a row reads as a
     rendering bug."""
     m = _reacted(("Loved", "aiden"), ("Loved", "rey"))
-    assert _badges(m) == ["❤️"]
+    assert _emoji(m) == ["❤️"]
 
 
 def test_a_removal_takes_off_only_that_person_s():
     m = _reacted(("Loved", "aiden"), ("Laughed at", "rey"),
                  ("Removed a heart from", "aiden"))
-    assert _badges(m) == ["😂"]
+    assert _emoji(m) == ["😂"]
 
 
 def test_a_removal_from_someone_who_never_reacted_is_harmless():
     m = _reacted(("Loved", "aiden"), ("Removed a like from", "nobody"))
-    assert _badges(m) == ["❤️"]
+    assert _emoji(m) == ["❤️"]
 
 
-def test_the_side_does_not_change_the_badge():
-    """Two mirrored icon sets used to exist so the tapback's tail faced the
-    right way. An emoji has no tail, so ours and theirs render the same."""
+def test_the_side_does_not_change_the_badge_content():
+    """Tail direction is a QML concern (message side). The emoji and mine
+    flag the model exports are the same on either side of the chat."""
     mine = _reacted(("Liked", "aiden"), outgoing=True)
     theirs = _reacted(("Liked", "aiden"))
     assert _badges(mine) == _badges(theirs)
 
 
-# ---- who reacted ---------------------------------------------------------
+# ---- who reacted / disc colour ------------------------------------------
 
 def test_my_own_reaction_is_keyed_as_mine():
     """Whatever handle a self-reaction arrives under, it has to collapse onto
@@ -172,6 +177,31 @@ def test_theirs_is_keyed_by_handle():
 def test_an_unidentified_sender_still_gets_a_key():
     """A key of "" would let two strangers overwrite each other."""
     assert ThreadStore._reactor({}, False) == "them"
+
+
+def test_my_reaction_is_marked_mine_for_the_blue_disc():
+    assert _badges(_reacted(("Loved", "me"))) == [
+        {"emoji": "❤️", "mine": True}]
+
+
+def test_their_reaction_is_not_mine_for_the_grey_disc():
+    assert _badges(_reacted(("Loved", "aiden"))) == [
+        {"emoji": "❤️", "mine": False}]
+
+
+def test_shared_emoji_stays_blue_if_i_also_sent_it():
+    """Same heart from me and them collapses to one badge; blue wins so my
+    disc colour is not lost under theirs."""
+    m = _reacted(("Loved", "aiden"), ("Loved", "me"))
+    assert _badges(m) == [{"emoji": "❤️", "mine": True}]
+
+
+def test_reaction_badges_helper_matches_the_row_projection():
+    raw = {"me": "😂", "aiden": "❤️"}
+    assert reaction_badges(raw) == [
+        {"emoji": "😂", "mine": True},
+        {"emoji": "❤️", "mine": False},
+    ]
 
 
 # ---- the picker ----------------------------------------------------------

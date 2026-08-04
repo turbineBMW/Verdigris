@@ -72,3 +72,59 @@ def test_a_failing_recorder_does_not_fail_the_send():
 
     svc._on_sent = boom
     assert svc.SendReply("+12155550150", "sounds good", "T") == "GUID-1"
+
+
+def test_group_send_splits_participants():
+    """A group recipient is many handles, not one mangled address."""
+    svc = service()
+    # Real _participants: the stub above collapsed to [r], which would hide
+    # a regression that treated the comma list as a single handle.
+    from iphonebridge.dbus_service import MessagesService
+    svc._participants = lambda r: MessagesService._participants(svc, r)
+
+    recipients = "tel:+12155550001,tel:+12155550002,tel:+12155550003"
+    svc.Send(recipients, "hey all")
+
+    parts, text, _kw = svc.imessage.sent[0]
+    assert text == "hey all"
+    assert parts == [
+        "tel:+12155550001", "tel:+12155550002", "tel:+12155550003",
+    ]
+
+
+def test_group_reply_splits_participants_and_keeps_threading():
+    svc = service()
+    from iphonebridge.dbus_service import MessagesService
+    svc._participants = lambda r: MessagesService._participants(svc, r)
+
+    recipients = "tel:+12155550001,tel:+12155550002"
+    svc.SendReply(recipients, "same", "TARGET-G", "who is free?")
+
+    parts, text, kw = svc.imessage.sent[0]
+    assert parts == ["tel:+12155550001", "tel:+12155550002"]
+    assert text == "same"
+    assert kw.get("reply_guid") == "TARGET-G"
+    assert svc.recorded == [
+        (recipients, "same", "GUID-1", "TARGET-G")
+    ]
+
+
+def test_group_send_does_not_map_fallback_on_imessage_failure():
+    """MAP only addresses one phone. Falling back after a group iMessage
+    failure looked like success (transfer path) while nothing reached the
+    chat — and IDS was previously looking up the whole comma list as one
+    handle when the split was missing.
+    """
+    svc = service()
+    from iphonebridge.dbus_service import MessagesService
+    svc._participants = lambda r: MessagesService._participants(svc, r)
+    svc.sessions = type("S", (), {"map": object(), "map_path": "/map"})()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("IDS returned zero keys")
+
+    svc.imessage.send = boom
+    with pytest.raises(dbus.exceptions.DBusException) as ei:
+        svc.Send("tel:+12155550001,tel:+12155550002", "hey")
+    assert "SendFailed" in ei.value.get_dbus_name()
+    assert svc.recorded == []

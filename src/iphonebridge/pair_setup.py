@@ -86,7 +86,7 @@ def write_local_env(mac: str) -> Path:
 
 def run_wizard(*, restart_after: bool = True) -> int:
     """Returns process exit code."""
-    typer.echo(typer.style("\n=== iphonebridge first-run setup ===\n",
+    typer.echo(typer.style("\n=== Blue first-run setup ===\n",
                            fg=typer.colors.CYAN, bold=True))
 
     devices = list_paired_devices()
@@ -96,7 +96,7 @@ def run_wizard(*, restart_after: bool = True) -> int:
         typer.echo("Pair your iPhone first. Two options:")
         typer.echo("  • GNOME Settings → Bluetooth → tap your iPhone under Other Devices")
         typer.echo("  • CLI: bluetoothctl  →  scan on, pair <MAC>, trust <MAC>, exit")
-        typer.echo("\nThen run `iphonebridge pair-setup` again.")
+        typer.echo("\nThen run `blue pair-setup` again.")
         return 1
 
     # Prefer obvious iPhones; fall back to all paired devices if none matched.
@@ -160,7 +160,7 @@ def run_wizard(*, restart_after: bool = True) -> int:
     typer.echo("and that you've started the daemon at least once after.")
 
     if restart_after:
-        if typer.confirm("\nRestart the iphonebridge daemon now to pick up the new MAC?",
+        if typer.confirm("\nRestart the Blue daemon now to pick up the new MAC?",
                          default=True):
             r = subprocess.run(
                 ["systemctl", "--user", "restart", "iphonebridge"],
@@ -168,7 +168,8 @@ def run_wizard(*, restart_after: bool = True) -> int:
             )
             if r.returncode == 0:
                 typer.echo(typer.style(
-                    "✓ Daemon restarted. Tail logs: journalctl --user -u iphonebridge -f",
+                    "✓ Daemon restarted. Tail logs: "
+                    "journalctl --user -u iphonebridge -f",
                     fg=typer.colors.GREEN))
             else:
                 typer.echo(typer.style(
@@ -177,5 +178,5 @@ def run_wizard(*, restart_after: bool = True) -> int:
                 typer.echo("Try manually: systemctl --user restart iphonebridge")
 
     typer.echo("\nNext step: trigger an SMS/iMessage to your phone, then:")
-    typer.echo("  iphonebridge sms-list")
+    typer.echo("  blue sms-list")
     return 0

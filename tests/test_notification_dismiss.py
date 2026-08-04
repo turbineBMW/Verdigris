@@ -10,12 +10,16 @@ whether the sink can match them to the popups it opened.
 
 Also: while a thread is open *and* the window is focused, new messages for
 that conversation must not raise a popup (they still do when unfocused).
+
+Message popups also auto-expire after NOTIFICATION_TIMEOUT_SEC; that path
+must not mark-read on the iPhone.
 """
 from __future__ import annotations
 
 from iphonebridge.events import SmsEvent
 from iphonebridge.imessage.handles import GROUP_KEY_PREFIX, group_key
 from iphonebridge.qtui.models import ThreadStore
+from iphonebridge.sinks import libnotify as libnotify_mod
 from iphonebridge.sinks.libnotify import LibnotifySink
 
 _key = LibnotifySink._peer_key
@@ -286,3 +290,45 @@ def test_inline_reply_callback_gets_reply_to_guid():
     assert calls == [
         ("tel:+12155550001,tel:+12155550002", "I am", "MSG-G", "who is free?")
     ]
+
+
+# ---- auto-expire timeout -------------------------------------------------
+
+
+def test_expire_timeout_defaults_to_fifteen_seconds(monkeypatch):
+    monkeypatch.setattr(libnotify_mod, "NOTIFICATION_TIMEOUT_SEC", 15)
+    assert libnotify_mod._expire_timeout_ms() == 15_000
+
+
+def test_expire_timeout_zero_means_never(monkeypatch):
+    monkeypatch.setattr(libnotify_mod, "NOTIFICATION_TIMEOUT_SEC", 0)
+    assert libnotify_mod._expire_timeout_ms() == 0
+
+
+def test_message_notify_uses_configured_timeout(monkeypatch):
+    """Notify's expire_timeout arg must reflect NOTIFICATION_TIMEOUT_SEC."""
+    monkeypatch.setattr(libnotify_mod, "NOTIFICATION_TIMEOUT_SEC", 8)
+    sink = _sink_without_bus()
+    captured: list[int] = []
+
+    def fake_notify(*args):
+        # Signature: app, replaces_id, icon, title, body, actions, hints, timeout
+        captured.append(int(args[7]))
+        return 42
+
+    sink._notif = type("N", (), {"Notify": staticmethod(fake_notify)})()
+    sink.handle(_sms("+12155550101", body="ping"))
+    assert captured == [8_000]
+
+
+def test_expired_popup_does_not_mark_read_on_iphone():
+    """Reason 1 (expired) must leave the message unread.
+
+    Path is present so a bug that treated expire as dismiss would try to
+    write Read=true over D-Bus. The early return on non-dismiss reasons
+    keeps us from reaching that path at all.
+    """
+    sink = _sink_without_bus()
+    sink._pending[9] = "/org/bluez/obex/message0"
+    sink._on_closed(9, 1)  # reason 1 = expired
+    assert 9 not in sink._pending

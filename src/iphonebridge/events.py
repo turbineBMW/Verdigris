@@ -191,6 +191,11 @@ def sms_sent_event(
     For a sent message the relevant party is the recipient, so the
     `sender_*` / `contact_name` fields carry the recipient — that keeps it
     in the same conversation thread as incoming messages from that person.
+
+    Multi-recipient (group) sends are a comma-separated participant list.
+    Those must also carry `chat_guid` as the shared `imessage-group:…` key,
+    or the bubble files under a mangled 1:1 key and the group never shows it
+    — which from the sending side looks exactly like the send failed.
     """
     # The transfer path tail alone ("transfer3") is NOT unique: obexd numbers
     # transfers per session starting at zero, so the counter resets every time
@@ -200,21 +205,45 @@ def sms_sent_event(
     stamp = f"{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}"
     tail = transfer_path.rsplit("/", 1)[-1] if transfer_path else "sent"
     handle = f"{tail}-{stamp}"
+    chat_guid = _sent_chat_guid(recipient)
+    # 1:1: keep sender_phone as the peer. Group: leave the multi-handle
+    # string only for diagnostics; threading keys on chat_guid instead.
     return SmsEvent(
         kind="sms_sent",
         handle=handle,
         sender_phone=recipient,
-        sender_phone_norm=normalize_phone(recipient),
+        sender_phone_norm=(
+            None if chat_guid else normalize_phone(recipient)
+        ),
         contact_name=contact_name,
         body=body,
         timestamp=datetime.now().astimezone(),
         is_read=True,
         guid=guid,
         reply_to_guid=reply_to_guid,
+        chat_guid=chat_guid,
         raw_status="sent",
         raw_type="sms_sent",
         message_path=None,
     )
+
+
+def _sent_chat_guid(recipient: str) -> str | None:
+    """Group identity for a send, or None for a 1:1 recipient."""
+    value = (recipient or "").strip()
+    if not value:
+        return None
+    # Already a group key (defensive — UI/notify usually strip the prefix).
+    from iphonebridge.imessage.handles import GROUP_KEY_PREFIX, group_key
+
+    if value.startswith(GROUP_KEY_PREFIX):
+        return value
+    if "," not in value:
+        return None
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    return group_key(parts)
 
 
 def sms_event_from_message1_props(

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "iphonebridge"
 version = "0.4.2"
-description = "Bluetooth bridge from iPhone to Linux desktop — SMS + notifications + contacts"
+description = "Blue — iPhone messages, calls, and notifications on your Linux desktop"
 authors = [{name = "Gabe Shatunovsky", email = "gabriel@shatunovsky.com"}]
 license = {text = "GPL-2.0-or-later"}
 requires-python = ">=3.10"
@@ -38,13 +38,25 @@ qt = [
 ]
 
 [project.scripts]
+# Product CLI is `blue`. `iphonebridge` remains as a compatibility alias.
+blue = "iphonebridge.cli:app"
 iphonebridge = "iphonebridge.cli:app"
 
 [project.gui-scripts]
+blue-qt = "iphonebridge.qtui.app:main"
 iphonebridge-qt = "iphonebridge.qtui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# QML, Lucide icons, and glossy tapback PNGs live next to the Python package
+# and are resolved at runtime via Theme.assetUrl / reactionUrl.
+[tool.setuptools.package-data]
+iphonebridge = [
+  "qtui/qml/**/*.qml",
+  "qtui/qml/**/qmldir",
+  "qtui/assets/**/*",
+]
 
 [tool.pytest.ini_options]
 # Without this, a bare `pytest` from the repo root recurses the whole tree

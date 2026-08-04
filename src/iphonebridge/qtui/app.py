@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,13 +42,19 @@ from iphonebridge.qtui.models import EmojiCompleter, ThreadStore
 log = logging.getLogger(__name__)
 
 APP_ID = "com.gabriel.iphonebridge.Qt"
-# Icon may still live under the historical .UI id if installed that way.
+# Historical icon id used by older desktop entries and metainfo.
+_ICON_NAME_LEGACY = "com.gabriel.iphonebridge.UI"
+# Packaged Blue message-bubble artwork (ships with the Qt extra).
+_PACKAGED_ICON = Path(__file__).parent / "assets" / "app-icon.svg"
+_ICON_DIR = Path.home() / ".local/share/icons/hicolor/scalable/apps"
+# Prefer the desktop-file id, then the legacy name, then the packaged asset.
 _ICON_CANDIDATES = (
-    Path.home() / ".local/share/icons/hicolor/scalable/apps" / f"{APP_ID}.svg",
-    Path.home()
-    / ".local/share/icons/hicolor/scalable/apps"
-    / "com.gabriel.iphonebridge.UI.svg",
+    _ICON_DIR / f"{APP_ID}.svg",
+    _ICON_DIR / f"{_ICON_NAME_LEGACY}.svg",
+    _PACKAGED_ICON,
 )
+_APPLICATIONS_DIR = Path.home() / ".local/share/applications"
+_DESKTOP_FILE = _APPLICATIONS_DIR / f"{APP_ID}.desktop"
 _QML_DIR = Path(__file__).parent / "qml"
 _THEME_PLUGIN_DIR = Path.home() / ".local/lib/iphonebridge-qt/plugins"
 _AUTOSTART_DIR = Path.home() / ".config" / "autostart"
@@ -164,7 +171,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._state = state
         self._store = store
-        self.setWindowTitle("Messages")
+        self.setWindowTitle("Blue")
         self.resize(980, 680)
         self.setMinimumSize(560, 380)
         # No server-side titlebar — the QML header draws its own controls,
@@ -382,11 +389,11 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(
-            self, "About Messages",
-            "<b>Messages</b> — iphonebridge<br><br>"
-            "SMS, iMessage, contacts, calls and notifications from an iPhone, "
-            "on Linux.<br>No Mac relay, no subscription.<br><br>"
-            "GPL-2.0-or-later")
+            self, "About Blue",
+            "<b>Blue</b><br><br>"
+            "Your iPhone’s messages, calls, notifications, and contacts "
+            "on Linux.<br>No Mac relay, no cloud service, no subscription."
+            "<br><br>GPL-2.0-or-later")
 
     def _update_status(self) -> None:
         if not self._state.available:
@@ -555,13 +562,16 @@ def _enable_multisampling() -> None:
 
 
 def _qt_exec_path() -> str:
-    """Absolute path to the iphonebridge-qt launcher for .desktop Exec=."""
-    sibling = Path(sys.executable).resolve().parent / "iphonebridge-qt"
-    if sibling.is_file():
-        return str(sibling)
-    found = shutil.which("iphonebridge-qt")
-    if found:
-        return found
+    """Absolute path to the Blue Qt launcher for .desktop Exec=."""
+    bin_dir = Path(sys.executable).resolve().parent
+    for name in ("blue-qt", "iphonebridge-qt"):
+        sibling = bin_dir / name
+        if sibling.is_file():
+            return str(sibling)
+    for name in ("blue-qt", "iphonebridge-qt"):
+        found = shutil.which(name)
+        if found:
+            return found
     # Last resort: re-invoke this module (works for `python -m` style runs).
     return f"{sys.executable} -m iphonebridge.qtui.app"
 
@@ -571,6 +581,73 @@ def _icon_path() -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+def _install_desktop_icon() -> Path | None:
+    """Install the Blue message-bubble icon into the user hicolor theme.
+
+    Plasma / GNOME taskbars resolve `Icon=` by theme name, not by file path.
+    Copy the packaged bubble under both the current desktop-file id and the
+    legacy UI id so pinned launchers and older .desktop files still work.
+    """
+    if not _PACKAGED_ICON.is_file():
+        return _icon_path()
+    try:
+        _ICON_DIR.mkdir(parents=True, exist_ok=True)
+        bubble = _PACKAGED_ICON.read_bytes()
+        for name in (APP_ID, _ICON_NAME_LEGACY):
+            dest = _ICON_DIR / f"{name}.svg"
+            if not dest.is_file() or dest.read_bytes() != bubble:
+                dest.write_bytes(bubble)
+        # Nudge icon caches without failing hard if the tools are missing.
+        for cmd in (
+            ["gtk-update-icon-cache", "-f", "-t",
+             str(Path.home() / ".local/share/icons/hicolor")],
+            ["xdg-desktop-menu", "forceupdate"],
+        ):
+            try:
+                subprocess.run(cmd, check=False, capture_output=True, timeout=5)
+            except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+                pass
+    except OSError as exc:
+        log.warning("could not install desktop icon: %s", exc)
+    return _icon_path()
+
+
+def _desktop_entry_body(*, autostart: bool = False) -> str:
+    """XDG .desktop contents for the Blue Messages app."""
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Blue",
+        "GenericName=Messages",
+        "Comment=Your iPhone's messages, calls, and notifications on Linux",
+        f"Exec={_qt_exec_path()}",
+        f"Icon={APP_ID}",
+        "Terminal=false",
+        "Categories=Network;InstantMessaging;Telephony;Qt;",
+        "Keywords=iPhone;SMS;iMessage;Bluetooth;Calls;Notifications;Messages;Blue;",
+        "StartupNotify=true",
+        "StartupWMClass=blue-qt",
+    ]
+    if autostart:
+        lines.extend([
+            "X-GNOME-Autostart-enabled=true",
+            "X-KDE-autostart-after=panel",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def _install_desktop_entry() -> None:
+    """Publish ~/.local/share/applications so Blue appears in the app menu."""
+    try:
+        _APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
+        body = _desktop_entry_body()
+        if not _DESKTOP_FILE.is_file() or _DESKTOP_FILE.read_text() != body:
+            _DESKTOP_FILE.write_text(body)
+            log.info("desktop entry installed: %s", _DESKTOP_FILE)
+    except OSError as exc:
+        log.warning("could not install desktop entry: %s", exc)
 
 
 def _autostart_enabled() -> bool:
@@ -584,22 +661,8 @@ def _enable_autostart() -> None:
     Also drops the legacy GTK autostart entry if present so both don't fire.
     """
     _AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
-    icon = _icon_path()
-    icon_line = f"Icon={icon}\n" if icon else ""
-    body = (
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=Messages\n"
-        "Comment=iPhone SMS & iMessage (iphonebridge)\n"
-        f"Exec={_qt_exec_path()}\n"
-        f"{icon_line}"
-        "Terminal=false\n"
-        "Categories=Network;InstantMessaging;\n"
-        f"StartupWMClass=iphonebridge-qt\n"
-        "X-GNOME-Autostart-enabled=true\n"
-        "X-KDE-autostart-after=panel\n"
-    )
-    _AUTOSTART_DESKTOP.write_text(body)
+    _install_desktop_icon()
+    _AUTOSTART_DESKTOP.write_text(_desktop_entry_body(autostart=True))
     # Prefer Qt over the retired GTK UI if both were enabled historically.
     if _LEGACY_AUTOSTART.is_file():
         _LEGACY_AUTOSTART.unlink()
@@ -626,12 +689,14 @@ def main() -> int:
     # QApplication (not QGuiApplication) so QMenuBar — and therefore the
     # global menu export — is available.
     app = QApplication(sys.argv)
-    app.setApplicationName("Messages")
-    app.setApplicationDisplayName("Messages")
+    # Product name is Blue; window title stays Messages-like for the chat UI.
+    app.setApplicationName("Blue")
+    app.setApplicationDisplayName("Blue")
     # Must match the .desktop basename so Plasma's taskbar maps the running
     # window onto the pinned launcher instead of showing a second icon.
     app.setDesktopFileName(APP_ID)
-    icon = _icon_path()
+    icon = _install_desktop_icon()
+    _install_desktop_entry()
     if icon is not None:
         app.setWindowIcon(QIcon(str(icon)))
 

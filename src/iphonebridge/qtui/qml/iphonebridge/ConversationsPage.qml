@@ -513,17 +513,6 @@ Item {
                                     size: pinnedGrid.avatarSize
                                     source: pinTile.modelData.avatar
                                     initials: pinTile.modelData.initials
-                                    // Pad around the tile was sized for this
-                                    // 6% hover growth so the highlight rim
-                                    // and scaled face stay inside the corner.
-                                    scale: (!pinTile.dragging && pinMouse.containsMouse)
-                                           ? 1.06 : 1.0
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: Theme.animFast
-                                            easing.type: Easing.OutCubic
-                                        }
-                                    }
                                 }
                                 // Name, with an unread dot to the left of it.
                                 //
@@ -1387,7 +1376,9 @@ Item {
                     Row {
                         id: typingRow
                         anchors.left: parent.left
-                        anchors.leftMargin: 14
+                        // Match the grey bubble body edge (16 + gutter), not
+                        // the tail tip that sticks out further left.
+                        anchors.leftMargin: 16
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 6
 
@@ -2140,11 +2131,20 @@ Item {
                     // before it. Zero for a burst, so quick back-and-forth
                     // still stacks tightly. See _RUN_GAP_SECONDS.
                     required property int gapBefore
+                    // How far a reaction disc sticks above its host. Used to
+                    // reserve layout space so a reply quote (or the message
+                    // above) is not painted under the badge. Keep in sync
+                    // with reactionBadge.disc / verticalCenterOffset below.
+                    readonly property int reactionClearance:
+                        reactions.length > 0 ? 18 : 0
                     required property bool tail
                     required property string richBody
                     required property bool jumbo
                     required property int imageW
                     required property int imageH
+                    // GIF (etc.): free-standing media uses AnimatedImage so
+                    // the loop actually plays — plain Image freezes on frame 0.
+                    required property bool animated
                     // iMessage's own id, empty for MAP messages. Gates every
                     // action the context menu offers — none of them can name
                     // their target without it.
@@ -2168,6 +2168,14 @@ Item {
                     // Store row id + search-hit highlight.
                     required property int eventId
                     required property bool highlight
+                    // Open Graph card under a URL-bearing bubble. linkUrl is
+                    // set as soon as the body is known; title/image fill in
+                    // when the background fetch lands (or from disk cache).
+                    required property string linkUrl
+                    required property string linkTitle
+                    required property string linkDescription
+                    required property string linkSite
+                    required property string linkImage
                     // Collapsed by default: the current text is the one that
                     // counts, and history would otherwise pad every edited
                     // message forever.
@@ -2263,6 +2271,40 @@ Item {
                     // uses the bubble item for layout — only the painted
                     // background and the tail drop away.
                     readonly property bool isJumbo: jumbo && !isMedia
+
+                    // Open Graph card is ready to draw (has a title or site).
+                    readonly property bool linkReady:
+                        !isMedia && linkUrl !== ""
+                        && (linkTitle !== "" || linkSite !== "")
+                    // Body is nothing but the URL (and whitespace). Messages
+                    // replaces that with the card alone — no raw link bubble.
+                    readonly property bool linkOnly: {
+                        if (linkUrl === "" || body === "")
+                            return false
+                        var rest = body.split(linkUrl).join("")
+                        return rest.trim().length === 0
+                    }
+                    // When the card owns the row, hide the text bubble.
+                    readonly property bool hideBubbleForLink:
+                        linkReady && linkOnly && !mediaOnly
+                    // Text shown in the bubble: once the card lands, strip
+                    // the URL so it is not duplicated under the preview.
+                    // Before the fetch, keep the linkified rich body so the
+                    // URL is still tappable while the card is loading.
+                    readonly property string displayBody: {
+                        if (mediaOnly)
+                            return "📎 Attachment — not sent over Bluetooth"
+                        if (!linkReady || linkUrl === "")
+                            return richBody === "" ? body : richBody
+                        if (linkOnly)
+                            return ""
+                        // Mixed "check this out https://…": drop the URL,
+                        // leave the caption. Collapse leftover whitespace.
+                        var plain = body.split(linkUrl).join(" ")
+                        return plain.replace(/\s+/g, " ").trim()
+                    }
+                    readonly property bool displayIsRich:
+                        !mediaOnly && !linkReady && richBody !== ""
 
                     width: msgList.width
                     spacing: 0
@@ -2710,6 +2752,16 @@ Item {
                         }
                     }
 
+                    // Reserve room for the reaction disc, which is anchored to
+                    // the bubble's top corner and draws above it. Without this
+                    // the badge sits on top of the reply quote (or the last
+                    // line of the message above) instead of clearing it.
+                    Item {
+                        width: parent.width
+                        height: msgDelegate.reactionClearance
+                        visible: height > 0
+                    }
+
                     Item {
                         id: msgRow
                         width: parent.width
@@ -2725,7 +2777,13 @@ Item {
                         // events reach it either way.
                         MouseArea {
                             id: bubbleHit
-                            anchors.fill: msgDelegate.showMedia ? mediaItem : bubble
+                            // Right-click target follows whatever is on
+                            // screen: media, the link card (URL-only), or
+                            // the text bubble.
+                            anchors.fill: msgDelegate.showMedia
+                                          ? mediaItem
+                                          : (msgDelegate.hideBubbleForLink
+                                             ? linkCard : bubble)
                             // Generous: the bubble is sized tight to its text
                             // and a few px either way should still count.
                             anchors.margins: -4
@@ -2863,13 +2921,20 @@ Item {
                                         NumberAnimation { duration: Theme.animFast }
                                     }
                                     Repeater {
+                                        // icon names match assets/reactions/<Name>.png.
+                                        // kind is the wire verb the picker sends
+                                        // (Heart / Like / …), not the emoji —
+                                        // these six have real tapback types, and
+                                        // sending them as arbitrary emoji would
+                                        // show up on the phone as the iOS 18
+                                        // kind instead of the classic one.
                                         model: [
-                                            { emoji: "❤️", kind: "Heart" },
-                                            { emoji: "👍", kind: "Like" },
-                                            { emoji: "👎", kind: "Dislike" },
-                                            { emoji: "😂", kind: "Laugh" },
-                                            { emoji: "‼️", kind: "Emphasize" },
-                                            { emoji: "❓", kind: "Question" },
+                                            { icon: "Heart", kind: "Heart" },
+                                            { icon: "ThumbsUp", kind: "Like" },
+                                            { icon: "ThumbsDown", kind: "Dislike" },
+                                            { icon: "Haha", kind: "Laugh" },
+                                            { icon: "Emphasize", kind: "Emphasize" },
+                                            { icon: "Question", kind: "Question" },
                                         ]
                                         Rectangle {
                                             required property var modelData
@@ -2882,32 +2947,23 @@ Item {
                                                 ColorAnimation { duration: Theme.animFast }
                                             }
 
-                                            Text {
+                                            Image {
                                                 anchors.centerIn: parent
-                                                text: parent.modelData.emoji
-                                                font.pixelSize: 17
-                                                scale: tapHover.hovered
-                                                       ? Theme.hoverScale : 1.0
-                                                Behavior on scale {
-                                                    NumberAnimation {
-                                                        duration: Theme.animFast
-                                                        easing.type: Easing.OutCubic
-                                                    }
-                                                }
+                                                width: 26; height: 26
+                                                source: Theme.reactionUrl(
+                                                    parent.modelData.icon)
+                                                sourceSize.width:
+                                                    26 * Math.ceil(
+                                                        Screen.devicePixelRatio * 2)
+                                                sourceSize.height: sourceSize.width
+                                                smooth: true
+                                                mipmap: true
+                                                fillMode: Image.PreserveAspectFit
                                             }
 
                                             HoverHandler { id: tapHover }
                                             TapHandler {
                                                 onTapped: {
-                                                    // A verb, not the emoji:
-                                                    // these six have real
-                                                    // tapback types on the
-                                                    // wire, and sending them
-                                                    // as arbitrary emoji
-                                                    // would show up on the
-                                                    // phone as the iOS 18
-                                                    // kind instead of the
-                                                    // classic one.
                                                     threadStore.react(
                                                         msgDelegate.guid,
                                                         parent.modelData.kind)
@@ -2932,14 +2988,6 @@ Item {
                                             text: "＋"
                                             color: Theme.textDim
                                             font.pixelSize: 15
-                                            scale: moreHover.hovered
-                                                   ? Theme.hoverScale : 1.0
-                                            Behavior on scale {
-                                                NumberAnimation {
-                                                    duration: Theme.animFast
-                                                    easing.type: Easing.OutCubic
-                                                }
-                                            }
                                         }
                                         HoverHandler { id: moreHover }
                                         TapHandler {
@@ -3043,14 +3091,6 @@ Item {
                                                     anchors.centerIn: parent
                                                     text: parent.modelData.emoji
                                                     font.pixelSize: 17
-                                                    scale: pickHover.hovered
-                                                           ? Theme.hoverScale : 1.0
-                                                    Behavior on scale {
-                                                        NumberAnimation {
-                                                            duration: Theme.animFast
-                                                            easing.type: Easing.OutCubic
-                                                        }
-                                                    }
                                                 }
                                                 HoverHandler { id: pickHover }
                                                 TapHandler {
@@ -3224,7 +3264,11 @@ Item {
                             }
                         }
 
-                        Image {
+                        // AnimatedImage for every free-standing media row.
+                        // For JPEG/PNG/HEIC it behaves like Image; for GIF it
+                        // actually plays. A plain Image always froze GIFs on
+                        // the first frame.
+                        AnimatedImage {
                             id: mediaItem
                             // Hide on empty source or decode failure so the
                             // file-chip bubble below can take over. Loading
@@ -3254,19 +3298,29 @@ Item {
                             height: Math.round(width * aspect)
                             fillMode: Image.PreserveAspectFit
                             asynchronous: true
-                            // Cached: decoding is capped at sourceSize, so
-                            // entries are small, and re-decoding on every
-                            // recycle made images blink during scrolling.
-                            cache: true
-                            // iPhone photos are 12MP+; decoding at full
-                            // resolution for a 300px view wastes memory.
-                            sourceSize.width: 640
+                            // Still photos: cache the downscaled decode so
+                            // recycle doesn't blink. Animated GIFs stay out
+                            // of the shared cache — multi-frame entries are
+                            // large and thrash it under a long media thread.
+                            cache: !animated
+                            // Stills: cap decode at 640. GIFs: leave native
+                            // (-1). Never use 0 — AnimatedImage treats that
+                            // as a zero-pixel image, status Ready, paints
+                            // nothing, which left blank gaps in the thread.
+                            sourceSize.width: animated ? -1 : 640
+                            // Loop when the model says GIF (or frameCount
+                            // says multi-frame after load — covers a blank
+                            // mime with a real animated file).
+                            playing: status === Image.Ready
+                                     && (animated || frameCount > 1)
                             smooth: true
-                            mipmap: true
+                            // Mipmaps don't apply cleanly to movie frames and
+                            // can freeze playback; stick to smooth scaling.
+                            mipmap: !animated
                             // Honour the EXIF orientation tag. Phone photos
                             // are very often stored rotated with the true
                             // orientation only in metadata, so without this
-                            // they display sideways.
+                            // they display sideways. Harmless on GIF.
                             autoTransform: true
                             // Fade in once decoded. Historical scroll-in
                             // uses the cache and often lands Ready on the
@@ -3285,7 +3339,8 @@ Item {
                             transformOrigin: Item.Center
 
                             // Photos get rounded corners; stickers stay bare
-                            // and keep their transparency.
+                            // and keep their transparency. Layer re-renders
+                            // each GIF frame so the mask stays correct.
                             layer.enabled: isImage && showMedia
                             layer.effect: OpacityMask { maskSource: imgMask }
 
@@ -3312,7 +3367,9 @@ Item {
                             // Successful media draws only the Image above.
                             // Failed/empty media falls through to the chip
                             // so the user still sees a name and can open it.
-                            visible: !showMedia
+                            // A ready link preview replaces a URL-only body
+                            // entirely — no raw-link bubble under the card.
+                            visible: !showMedia && !msgDelegate.hideBubbleForLink
 
                             anchors {
                                 right: outgoing ? parent.right : undefined
@@ -3331,7 +3388,11 @@ Item {
                                    ? Math.min(240, msgList.width * 0.6)
                                    : Math.min(msgText.implicitWidth + padH,
                                               msgList.width * 0.68)
-                            height: isFile ? 40 : msgText.implicitHeight + padV
+                            // Zero height while hidden so the link card can
+                            // sit at y:2 without a phantom gap.
+                            height: !visible ? 0
+                                    : (isFile ? 40
+                                       : msgText.implicitHeight + padV)
                             radius: Theme.radiusBubble
                             // Body and tail are one filled path (see below),
                             // so this Rectangle is only geometry now. Painting
@@ -3395,18 +3456,12 @@ Item {
                                 visible: bubble.isFile
                                 anchors.centerIn: parent
                                 spacing: 7
-                                // Slight lift on hover so a tappable file
-                                // chip reads as a control, not flat chrome.
+                                // Opacity lift on hover so a tappable file
+                                // chip reads as a control — colour only, no
+                                // scale (see AGENTS.md).
                                 opacity: fileChipHover.hovered ? 1.0 : 0.92
-                                scale: fileChipHover.hovered ? 1.02 : 1.0
                                 Behavior on opacity {
                                     NumberAnimation { duration: Theme.animFast }
-                                }
-                                Behavior on scale {
-                                    NumberAnimation {
-                                        duration: Theme.animFast
-                                        easing.type: Easing.OutCubic
-                                    }
                                 }
                                 HoverHandler {
                                     id: fileChipHover
@@ -3463,14 +3518,13 @@ Item {
                                 horizontalAlignment: isJumbo && outgoing
                                                      ? Text.AlignRight
                                                      : Text.AlignLeft
-                                // Rich text only when there's emoji to
-                                // resize — it's a heavier layout path, and
-                                // most messages don't need it.
-                                textFormat: richBody === "" ? Text.PlainText
-                                                            : Text.RichText
-                                text: mediaOnly
-                                      ? "📎 Attachment — not sent over Bluetooth"
-                                      : (richBody === "" ? body : richBody)
+                                // Rich text when emoji need resizing *or*
+                                // the body has a linkified URL — both ride
+                                // richBody. Once the preview card replaces
+                                // the URL, displayBody is plain (stripped).
+                                textFormat: msgDelegate.displayIsRich
+                                            ? Text.RichText : Text.PlainText
+                                text: msgDelegate.displayBody
                                 font.italic: mediaOnly
                                 wrapMode: Text.Wrap
                                 font.pixelSize: Math.round(13 * Theme.fontScale)
@@ -3478,11 +3532,211 @@ Item {
                                        ? (outgoing ? Qt.rgba(1, 1, 1, 0.75)
                                                    : Theme.textDim)
                                        : (outgoing ? "white" : Theme.bubbleInText)
+                                // Open the URL the rich-text anchor named.
+                                // Without this the link is underlined but
+                                // dead — TextEdit does not follow links on
+                                // its own the way Text does.
+                                onLinkActivated: (link) =>
+                                    Qt.openUrlExternally(link)
                             }
 
                             TapHandler {
                                 enabled: bubble.isFile && image !== ""
                                 onTapped: Qt.openUrlExternally(image)
+                            }
+                        }
+
+                        // ---- Open Graph card (replaces URL-only bodies) ---
+                        // Ready once we have a title or site. For a message
+                        // that is just a URL, this is the whole bubble —
+                        // Messages.app never shows the raw link underneath.
+                        // Mixed text+URL keeps a caption bubble and puts
+                        // the card under it.
+                        //
+                        // `clip: true` does NOT round children — only the
+                        // rectangular bounds. The image is masked to the
+                        // card radius so top corners match the bottom, and
+                        // a transparent stroked rim sits on top so the
+                        // border is never painted under the photo.
+                        Item {
+                            id: linkCard
+                            visible: msgDelegate.linkReady
+                            anchors {
+                                right: outgoing ? parent.right : undefined
+                                left: outgoing ? undefined : parent.left
+                                rightMargin: msgDelegate.sideMargin
+                                leftMargin: 16 + gutter
+                            }
+                            // URL-only: sits where the bubble was. Mixed:
+                            // a few px under the caption bubble.
+                            y: msgDelegate.hideBubbleForLink
+                               ? 2
+                               : (showMedia ? mediaItem.height
+                                            : bubble.height) + 6
+                            width: Math.min(280, msgList.width * 0.62)
+                            height: linkBody.height
+                            // Search-jump pulse only — no hover scale.
+                            scale: msgDelegate.highlight
+                                   ? msgDelegate.rimScale : 1.0
+                            transformOrigin: Item.Center
+
+                            // Filled plate + content, masked to radius so the
+                            // image is rounded on every corner.
+                            Item {
+                                id: linkBody
+                                width: parent.width
+                                height: linkCol.implicitHeight
+
+                                Rectangle {
+                                    id: linkFill
+                                    anchors.fill: parent
+                                    radius: 14
+                                    color: {
+                                        var base = outgoing
+                                            ? Qt.rgba(0.02, 0.30, 0.70, 0.45)
+                                            : (Theme.dark
+                                               ? Qt.rgba(0.28, 0.28, 0.32, 0.55)
+                                               : Qt.rgba(1, 1, 1, 0.65))
+                                        if (!linkHover.hovered)
+                                            return base
+                                        return outgoing
+                                            ? Qt.rgba(0.08, 0.42, 0.95, 0.62)
+                                            : (Theme.dark
+                                               ? Qt.rgba(0.38, 0.38, 0.44, 0.72)
+                                               : Qt.rgba(1, 1, 1, 0.85))
+                                    }
+                                    Behavior on color {
+                                        ColorAnimation { duration: Theme.animFast }
+                                    }
+                                }
+
+                                Column {
+                                    id: linkCol
+                                    width: parent.width
+                                    spacing: 0
+
+                                    Image {
+                                        id: linkImg
+                                        width: parent.width
+                                        // Reserve a short landscape plate;
+                                        // most OG images are wider than tall.
+                                        height: (linkImage !== ""
+                                                 && status !== Image.Error
+                                                 && status !== Image.Null)
+                                                ? Math.round(width * 0.52) : 0
+                                        source: linkImage !== "" ? linkImage : ""
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                        cache: true
+                                        sourceSize.width: 560
+                                        visible: height > 0
+                                        opacity: status === Image.Ready ? 1 : 0
+                                        Behavior on opacity {
+                                            NumberAnimation {
+                                                duration: Theme.animFast
+                                            }
+                                        }
+                                    }
+
+                                    Column {
+                                        width: parent.width
+                                        spacing: 3
+                                        topPadding: 8
+                                        bottomPadding: 10
+                                        leftPadding: 12
+                                        rightPadding: 12
+
+                                        Text {
+                                            visible: linkSite !== ""
+                                            width: parent.width
+                                                   - parent.leftPadding
+                                                   - parent.rightPadding
+                                            text: linkSite
+                                            color: outgoing
+                                                   ? Qt.rgba(1, 1, 1, 0.7)
+                                                   : Theme.textDim
+                                            font.pixelSize: 11
+                                            font.capitalization: Font.AllUppercase
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            visible: linkTitle !== ""
+                                            width: parent.width
+                                                   - parent.leftPadding
+                                                   - parent.rightPadding
+                                            text: linkTitle
+                                            color: outgoing ? "white"
+                                                            : Theme.text
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            visible: linkDescription !== ""
+                                            width: parent.width
+                                                   - parent.leftPadding
+                                                   - parent.rightPadding
+                                            text: linkDescription
+                                            color: outgoing
+                                                   ? Qt.rgba(1, 1, 1, 0.78)
+                                                   : Theme.textDim
+                                            font.pixelSize: 12
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 3
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+
+                                // Same mask pattern as free-standing photos:
+                                // `clip: true` is rectangular only; the
+                                // OpacityMask is what rounds the image.
+                                layer.enabled: true
+                                layer.effect: OpacityMask {
+                                    maskSource: linkMask
+                                }
+                            }
+
+                            Rectangle {
+                                id: linkMask
+                                width: linkBody.width
+                                height: linkBody.height
+                                radius: 14
+                                color: "white"
+                                visible: false
+                                layer.enabled: true
+                                layer.smooth: true
+                            }
+
+                            // Full rim on top of the mask so every edge —
+                            // including over the image — gets the same stroke.
+                            Rectangle {
+                                anchors.fill: linkBody
+                                radius: 14
+                                color: "transparent"
+                                border.color: (linkHover.hovered
+                                               || msgDelegate.highlight)
+                                              ? Theme.accent
+                                              : Theme.bubbleRim
+                                border.width: (linkHover.hovered
+                                               || msgDelegate.highlight)
+                                              ? 1.5 : 1
+                                Behavior on border.color {
+                                    ColorAnimation { duration: Theme.animFast }
+                                }
+                            }
+
+                            HoverHandler {
+                                id: linkHover
+                                cursorShape: Qt.PointingHandCursor
+                            }
+                            TapHandler {
+                                onTapped: {
+                                    if (linkUrl !== "")
+                                        Qt.openUrlExternally(linkUrl)
+                                }
                             }
                         }
 
@@ -3495,15 +3749,30 @@ Item {
                             initials: senderInitials || "?"
                             x: 12
                             anchors {
-                                bottom: showMedia ? mediaItem.bottom : bubble.bottom
+                                bottom: showMedia ? mediaItem.bottom
+                                        : (msgDelegate.hideBubbleForLink
+                                           ? linkCard.bottom : bubble.bottom)
                             }
                         }
 
                         // Anchor for the row height + the tapback badge.
+                        // Includes the Open Graph card when one is ready so
+                        // the next bubble does not paint over it. URL-only
+                        // rows are just the card (no bubble gap).
                         Item {
                             id: content
                             width: 1
-                            height: showMedia ? mediaItem.height : bubble.height
+                            height: {
+                                if (showMedia)
+                                    return mediaItem.height
+                                           + (linkCard.visible
+                                              ? linkCard.height + 6 : 0)
+                                if (msgDelegate.hideBubbleForLink)
+                                    return linkCard.height
+                                return bubble.height
+                                       + (linkCard.visible
+                                          ? linkCard.height + 6 : 0)
+                            }
                         }
 
                         // The Show Times gutter. Deliberately outside the
@@ -3534,19 +3803,19 @@ Item {
                                 rightMargin: 18
                                 verticalCenter: msgDelegate.showMedia
                                                 ? mediaItem.verticalCenter
-                                                : bubble.verticalCenter
+                                                : (msgDelegate.hideBubbleForLink
+                                                   ? linkCard.verticalCenter
+                                                   : bubble.verticalCenter)
                             }
                         }
 
                         // Tapbacks, overlapping the corner of the bubble
                         // nearest the centre of the view, as in Messages.app.
                         //
-                        // Bare emoji, no disc behind them: they used to be
-                        // six hand-drawn SVGs, which meant an iOS 18 emoji
-                        // tapback had to borrow an empty bubble and get
-                        // painted into a hole measured off the artwork. Every
-                        // reaction is an emoji now, so none of them is a
-                        // special case.
+                        // Each badge is a tailed disc (blue if I sent it,
+                        // grey if they did) with the emoji / classic PNG on
+                        // top. The tail faces *away* from the message: left
+                        // on outgoing, right on incoming.
                         //
                         // Live arrivals pop in; historical badges drawn when
                         // a delegate is first built stay still — `_live` is
@@ -3564,7 +3833,7 @@ Item {
                             property bool _live: false
                             Component.onCompleted: {
                                 // After children (including the Repeater's
-                                // Text items) have completed, so their
+                                // items) have completed, so their
                                 // onCompleted sees `_live` still false.
                                 Qt.callLater(function () {
                                     reactionBadge._live = true
@@ -3587,41 +3856,111 @@ Item {
                             // they read as one cluster — and because later
                             // siblings paint over earlier ones, the newest
                             // reaction lands on top without touching z.
-                            //
-                            // About a third of each emoji is covered: enough
-                            // to read as a stack without hiding what any of
-                            // them are.
-                            spacing: -Math.round(reactionBadge.glyph * 0.34)
-                            // Roughly the width one emoji occupies at this
-                            // size — the margins below are fractions of it, so
-                            // the cluster keeps sitting on the bubble's corner
-                            // if the size ever changes.
-                            readonly property int glyph: 20
+                            spacing: -Math.round(reactionBadge.disc * 0.28)
+                            // Disc size matches the bubble SVG's main circle
+                            // at this scale. Icon stays under ~half the disc
+                            // so the glossy PNGs have breathing room inside
+                            // the tailed disc rather than kissing the rim.
+                            readonly property int disc: 30
+                            readonly property int icon: 14
+                            // Badge rides the visible primary surface:
+                            // media, link card (URL-only), or text bubble.
+                            readonly property Item host:
+                                showMedia ? mediaItem
+                                : (msgDelegate.hideBubbleForLink
+                                   ? linkCard : bubble)
                             anchors {
-                                // Straddling the bubble's top edge, not
-                                // floating above it: at a whole glyph of
-                                // negative margin a single reaction cleared
-                                // the corner entirely and looked unattached
-                                // to the message it belonged to. Two-thirds
-                                // of it now sits over the bubble.
-                                verticalCenter: showMedia ? mediaItem.top : bubble.top
-                                verticalCenterOffset: Math.round(glyph * 0.15)
-                                left: outgoing ? (showMedia ? mediaItem.left : bubble.left)
-                                               : undefined
-                                right: outgoing ? undefined
-                                                : (showMedia ? mediaItem.right : bubble.right)
-                                leftMargin: -Math.round(glyph * 0.35)
-                                rightMargin: -Math.round(glyph * 0.35)
+                                // Parked on the outer top corner: centre sits
+                                // on the host's top edge and hangs mostly
+                                // outside the message, so the disc only
+                                // kisses the corner instead of covering the
+                                // first line of text.
+                                verticalCenter: host.top
+                                verticalCenterOffset: -Math.round(disc * 0.08)
+                                left: outgoing ? host.left : undefined
+                                right: outgoing ? undefined : host.right
+                                leftMargin: -Math.round(disc * 0.48)
+                                rightMargin: -Math.round(disc * 0.48)
                             }
 
                             Repeater {
                                 model: msgDelegate.reactions
-                                Text {
+                                Item {
                                     id: reactionGlyph
-                                    required property string modelData
+                                    // modelData: { emoji: "❤️", mine: bool }
+                                    required property var modelData
                                     required property int index
-                                    text: modelData
-                                    font.pixelSize: 22
+                                    // Keep the 117×115 aspect of the bubble
+                                    // SVG so the tail isn't squashed.
+                                    width: reactionBadge.disc
+                                    height: Math.round(
+                                        reactionBadge.disc * (115 / 117))
+                                    readonly property string emoji:
+                                        modelData.emoji || ""
+                                    readonly property bool mine:
+                                        !!modelData.mine
+                                    readonly property string icon:
+                                        "" + Theme.classicReactionUrl(emoji)
+                                    readonly property bool isClassic:
+                                        icon.length > 0
+
+                                    Image {
+                                        id: bubbleBg
+                                        anchors.fill: parent
+                                        source: Theme.reactionBubbleUrl(
+                                            outgoing, reactionGlyph.mine)
+                                        // Without sourceSize the SVG
+                                        // rasterizes at its intrinsic
+                                        // 117×115 and is then scaled down,
+                                        // which is what made it look jagged.
+                                        sourceSize.width:
+                                            width * Math.ceil(
+                                                Screen.devicePixelRatio * 2)
+                                        sourceSize.height:
+                                            height * Math.ceil(
+                                                Screen.devicePixelRatio * 2)
+                                        smooth: true
+                                        mipmap: true
+                                        antialiasing: true
+                                    }
+
+                                    // Glyph sits on the main-circle centre,
+                                    // which is off the SVG midpoint because
+                                    // the tail shifts the mass.
+                                    Item {
+                                        width: reactionBadge.icon
+                                        height: reactionBadge.icon
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.horizontalCenterOffset:
+                                            (Theme.reactionGlyphXFrac(outgoing)
+                                             - 0.5) * parent.width
+                                        anchors.verticalCenterOffset:
+                                            (Theme.reactionGlyphYFrac - 0.5)
+                                            * parent.height
+
+                                        Image {
+                                            anchors.fill: parent
+                                            visible: reactionGlyph.isClassic
+                                            source: reactionGlyph.icon
+                                            sourceSize.width:
+                                                reactionBadge.icon * Math.ceil(
+                                                    Screen.devicePixelRatio * 2)
+                                            sourceSize.height: sourceSize.width
+                                            smooth: true
+                                            mipmap: true
+                                            fillMode: Image.PreserveAspectFit
+                                        }
+                                        Text {
+                                            anchors.centerIn: parent
+                                            visible: !reactionGlyph.isClassic
+                                            text: reactionGlyph.emoji
+                                            font.pixelSize:
+                                                Math.round(
+                                                    reactionBadge.icon * 0.95)
+                                        }
+                                    }
+
                                     // New glyphs (live reaction while the
                                     // bubble is on screen) pop in; glyphs
                                     // built with the delegate do not.
@@ -4398,15 +4737,6 @@ Item {
                                         text: modelData.emoji
                                         font.pixelSize: 15
                                         anchors.verticalCenter: parent.verticalCenter
-                                        scale: (index === composeField.highlighted
-                                                || hov.hovered)
-                                               ? Theme.hoverScale : 1.0
-                                        Behavior on scale {
-                                            NumberAnimation {
-                                                duration: Theme.animFast
-                                                easing.type: Easing.OutCubic
-                                            }
-                                        }
                                     }
                                     Text {
                                         text: ":" + modelData.code

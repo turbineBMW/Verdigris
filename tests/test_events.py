@@ -151,6 +151,32 @@ class TestSmsSentEvent:
         assert parsed["body"] == "hi"
 
 
+class TestGroupSent:
+    def test_multi_recipient_sets_group_chat_guid(self):
+        """Group sends must key on imessage-group:…, not a concat of phones."""
+        from iphonebridge.message_store import thread_key_for
+
+        e = sms_sent_event(
+            "tel:+12155550001,tel:+12155550002,tel:+12155550003",
+            "hey all",
+            guid="G-1",
+            reply_to_guid="PARENT",
+        )
+        d = e.to_dict()
+        assert d["chat_guid"] and d["chat_guid"].startswith("imessage-group:")
+        assert "tel:+12155550001" in d["chat_guid"]
+        assert "tel:+12155550002" in d["chat_guid"]
+        assert thread_key_for(d).startswith("imessage-group:")
+        assert d["reply_to_guid"] == "PARENT"
+        # Digits concat of every member must not become the thread key.
+        assert d["sender_phone_norm"] is None
+
+    def test_one_to_one_send_has_no_chat_guid(self):
+        e = sms_sent_event("+15551234567", "hi")
+        assert e.chat_guid is None
+        assert e.sender_phone_norm == "15551234567"
+
+
 class TestSmsEventDisplay:
     def test_prefers_contact_over_phone(self):
         e = SmsEvent(

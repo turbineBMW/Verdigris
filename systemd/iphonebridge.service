@@ -1,6 +1,6 @@
 [Unit]
-Description=iphonebridge — iPhone↔Linux Bluetooth bridge
-Documentation=https://github.com/gabrielmeir53/iphonebridge
+Description=Blue — iPhone messages, calls, and notifications on Linux
+Documentation=https://github.com/gutbash/blue
 After=bluetooth.target graphical-session.target dbus.socket
 Wants=bluetooth.target
 Requires=dbus.socket
@@ -9,9 +9,9 @@ Requires=dbus.socket
 Type=simple
 # Source per-machine config (IPHONEBRIDGE_MAC etc.). Leading `-` means
 # the file is optional — the service starts even if it's missing, but
-# `iphonebridge doctor` will then warn that the MAC isn't configured.
+# `blue doctor` will then warn that the MAC isn't configured.
 EnvironmentFile=-%h/.config/iphonebridge/local.env
-ExecStart=%h/blue/.venv/bin/iphonebridge run
+ExecStart=%h/blue/.venv/bin/blue run
 Restart=on-failure
 RestartSec=5
 # Wait up to 10s for clean shutdown

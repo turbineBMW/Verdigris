@@ -1,4 +1,4 @@
-"""Typer CLI entrypoints."""
+"""Typer CLI entrypoints for Blue (`blue` / legacy `iphonebridge`)."""
 from __future__ import annotations
 
 import logging
@@ -11,7 +11,9 @@ from iphonebridge import bluez_setup, config
 
 app = typer.Typer(
     add_completion=False,
-    help="iPhone ↔ Linux Bluetooth bridge for Pop!_OS.",
+    name="blue",
+    help="Blue — your iPhone’s messages, calls, and notifications on Linux.",
+    no_args_is_help=True,
 )
 
 
@@ -23,7 +25,7 @@ def _setup_logging(verbose: bool) -> None:
 
 @app.command()
 def run(verbose: bool = typer.Option(False, "-v", "--verbose")):
-    """Start the iphonebridge daemon (runs until Ctrl+C / SIGTERM)."""
+    """Start the Blue daemon (runs until Ctrl+C / SIGTERM)."""
     _setup_logging(verbose)
     # Import inside command to avoid loading dbus stack just to print --help
     from iphonebridge.daemon import Daemon
@@ -68,7 +70,7 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
             log.info("Adapter CoD = 0x%06x (A/V Hands-Free)  OK", cod)
         else:
             log.warning("Adapter CoD = 0x%06x — not A/V Hands-Free. "
-                        "Run `iphonebridge run` (needs sudo) or set manually:",
+                        "Run `blue run` (needs sudo) or set manually:",
                         cod)
             log.warning("    sudo btmgmt class %d %d",
                         config.COD_MAJOR, config.COD_MINOR)
@@ -248,7 +250,7 @@ def sms_list(
                         typer.echo("iOS only exposes a small slice of recent "
                                    "messages via MAP. For older history, try:")
                         typer.echo(typer.style(
-                            f"  iphonebridge sms-list --from {from_contact!r} "
+                            f"  blue sms-list --from {from_contact!r} "
                             f"--source local -n {n}",
                             fg=typer.colors.WHITE))
                     else:
@@ -291,7 +293,7 @@ def sms_list(
             f"No local message store yet at {config.MESSAGES_DB}",
             fg=typer.colors.YELLOW,
         ))
-        typer.echo("Is the daemon running? "
+        typer.echo("Is the Blue daemon running? "
                    "Try: systemctl --user status iphonebridge")
         raise typer.Exit(code=1)
 
@@ -330,8 +332,8 @@ def ancs_enable(
       2. Calls the sudoers-gated helper, which writes LastUsedBearer=le
          into BlueZ's pairing record for the iPhone.
       3. Disconnects + reconnects the iPhone so BlueZ uses BLE this
-         time. The running iphonebridge daemon's AncsClient will pick
-         up the ANCS characteristics as they appear.
+         time. The running Blue daemon's AncsClient will pick up the
+         ANCS characteristics as they appear.
     """
     _setup_logging(verbose)
     import subprocess
@@ -423,7 +425,7 @@ def _resolve_recipient(raw: str) -> str:
     if not matches:
         typer.echo(typer.style(
             f"No contact matched {raw!r}. Try a phone number with +, or run "
-            "`iphonebridge contacts-sync` to refresh the cache.",
+            "`blue contacts-sync` to refresh the cache.",
             fg=typer.colors.RED,
         ))
         raise typer.Exit(code=2)
@@ -481,7 +483,8 @@ def sms_send(
     The iPhone automatically routes to iMessage when the recipient is
     iMessage-capable (blue bubble). Otherwise falls back to SMS.
 
-    Requires the daemon to be running (systemctl --user start iphonebridge).
+    Requires the Blue daemon to be running
+    (systemctl --user start iphonebridge).
     """
     _setup_logging(verbose)
 
@@ -498,7 +501,7 @@ def sms_send(
         iface = dbus.Interface(proxy, "com.gabriel.iphonebridge.Messages1")
     except dbus.exceptions.DBusException as e:
         typer.echo(typer.style(
-            f"Couldn't reach iphonebridge daemon on DBus: {e.get_dbus_message()}",
+            f"Couldn't reach the Blue daemon on D-Bus: {e.get_dbus_message()}",
             fg=typer.colors.RED,
         ))
         typer.echo("Start it with: systemctl --user start iphonebridge")
@@ -543,7 +546,7 @@ def call(
     """Place a phone call through the iPhone (HFP Hands-Free).
 
     Call audio routes through the laptop's mic + speakers. Requires the
-    daemon running and HFP set up — see `iphonebridge hfp-enable`.
+    Blue daemon running and HFP set up — see `blue hfp-enable`.
     """
     _setup_logging(verbose)
     import dbus
@@ -557,8 +560,8 @@ def call(
             f"Call failed: {e.get_dbus_name()}\n  {e.get_dbus_message()}",
             fg=typer.colors.RED,
         ))
-        typer.echo("Is the daemon running and the iPhone connected? "
-                   "Try `iphonebridge hfp-enable`.")
+        typer.echo("Is the Blue daemon running and the iPhone connected? "
+                   "Try `blue hfp-enable`.")
         raise typer.Exit(code=3) from None
     typer.echo(typer.style(f"Calling {resolved} …  ({call_path})",
                            fg=typer.colors.GREEN))
@@ -781,7 +784,7 @@ def backup_sync(
 def version():
     """Print version and exit."""
     from iphonebridge import __version__
-    typer.echo(f"iphonebridge {__version__}")
+    typer.echo(f"blue {__version__}")
 
 
 if __name__ == "__main__":

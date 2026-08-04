@@ -123,7 +123,10 @@ def test_reaction_badge_updates_in_place(store):
     assert resets == []
     assert changes
     last = [r for r in store._message_model.rows() if r.get("guid") == "G2"][-1]
-    assert last["reactions"] == ["❤️", "😂"]
+    assert last["reactions"] == [
+        {"emoji": "❤️", "mine": False},
+        {"emoji": "😂", "mine": False},
+    ]
 
 
 def test_thread_reload_skips_unchanged_rows():

@@ -53,7 +53,7 @@ echo "[+] Installed /etc/sudoers.d/iphonebridge-ancs (for $USER_TO_GRANT)"
 cat <<EOF
 
 [+] Done. Next step: trigger an ANCS attempt
-      iphonebridge ancs-enable
+      blue ancs-enable
 
 If the daemon already had a Connected pair, the ancs-enable command will
 edit the bonding record, disconnect, and reconnect. BlueZ should then

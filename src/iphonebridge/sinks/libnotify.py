@@ -4,9 +4,13 @@ Body format: title = display sender (contact name or phone number),
              body  = SMS text (truncated at ~280 chars to avoid huge popups).
 
 Persistence model — notifications stay visible until ONE of:
+  • The expire timeout elapses (default 15s; see NOTIFICATION_TIMEOUT_SEC)
   • The user dismisses the popup (clicks/swipes)        → we mark-read on iPhone
   • The iPhone marks the message read (user opens it)  → we auto-close popup
-That way an unread message is never "missed" on the desktop side.
+  • The user opens the conversation in the desktop app → we auto-close popup
+
+Auto-expiry and programmatic close do **not** mark the message read. Only a
+manual dismiss (reason=2) writes Read=true back over MAP.
 
 Read-state sync:
   Linux dismiss → MAP Message1.Properties.Set(Read=true)  → iPhone marks read
@@ -26,6 +30,7 @@ import dbus.exceptions
 from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.avatars import circular as circular_avatar
 from iphonebridge.bus import session_bus
+from iphonebridge.config import NOTIFICATION_TIMEOUT_SEC
 from iphonebridge.events import SmsEvent, normalize_phone
 from iphonebridge.imessage.handles import GROUP_KEY_PREFIX
 
@@ -56,6 +61,12 @@ def _escape_markup(text: str) -> str:
                 .replace("<", "&lt;")
                 .replace(">", "&gt;"))
 
+
+def _expire_timeout_ms() -> int:
+    """Milliseconds for Notify's expire_timeout. 0 = never expire."""
+    sec = max(0, int(NOTIFICATION_TIMEOUT_SEC))
+    return sec * 1000
+
 # NotificationClosed reason codes (org.freedesktop.Notifications spec):
 #   1 = expired (timeout)
 #   2 = dismissed by user
@@ -64,7 +75,7 @@ def _escape_markup(text: str) -> str:
 #
 # We mark-read only on dismissed-by-user. Reason 3 = we're already closing
 # because the iPhone marked it read (so we'd be in a write-self-write loop).
-# Reason 1 = expired, but with timeout=0 this shouldn't happen for us.
+# Reason 1 = timed out; leave the message unread so the badge still shows.
 _REASON_DISMISSED = 2
 
 
@@ -129,8 +140,14 @@ class LibnotifySink:
         except Exception:
             self._reply_match = None
             log.debug("notification server has no NotificationReplied signal")
-        log.info(
-            "libnotify sink ready (persistent + bidirectional read-sync)")
+        timeout_ms = _expire_timeout_ms()
+        if timeout_ms:
+            log.info(
+                "libnotify sink ready (auto-expire %ds + bidirectional read-sync)",
+                timeout_ms // 1000)
+        else:
+            log.info(
+                "libnotify sink ready (persistent + bidirectional read-sync)")
 
     @staticmethod
     def _peer_key(handle: str | None) -> str | None:
@@ -328,10 +345,10 @@ class LibnotifySink:
                 f"Reply to {event.display_sender}…")
 
         try:
-            # expire_timeout=0 → notification stays visible indefinitely.
-            # We close it ourselves when the iPhone marks the message read,
-            # or rely on the user to dismiss it manually (which we then
-            # propagate back as mark-read).
+            # expire_timeout: auto-dismiss after NOTIFICATION_TIMEOUT_SEC
+            # (0 = never). We also close ourselves when the iPhone marks the
+            # message read, or when the user opens the thread in the app.
+            # Manual dismiss still propagates mark-read; timeout does not.
             nid = int(self._notif.Notify(
                 _APP_NAME,
                 dbus.UInt32(0),
@@ -340,7 +357,7 @@ class LibnotifySink:
                 body,
                 dbus.Array(actions, signature="s"),
                 dbus.Dictionary(hints, signature="sv"),
-                dbus.Int32(0),  # 0 = never expire
+                dbus.Int32(_expire_timeout_ms()),
             ))
         except dbus.exceptions.DBusException as e:
             log.error("libnotify Notify failed: %s", e.get_dbus_name())
@@ -381,9 +398,9 @@ class LibnotifySink:
         if len(body) > _BODY_LIMIT:
             body = body[:_BODY_LIMIT - 1] + "…"
         try:
-            # ANCS notifications also persistent (timeout=0). User dismisses
-            # or we close on demand. No mark-read sync for ANCS (the iPhone
-            # doesn't expose a write-back path for app notification state).
+            # Same auto-expire as SMS popups. No mark-read sync for ANCS
+            # (the iPhone doesn't expose a write-back path for app
+            # notification state).
             self._notif.Notify(
                 _APP_NAME,
                 dbus.UInt32(0),
@@ -392,7 +409,7 @@ class LibnotifySink:
                 _escape_markup(body),
                 dbus.Array([], signature="s"),
                 dbus.Dictionary(self._base_hints(), signature="sv"),
-                dbus.Int32(0),
+                dbus.Int32(_expire_timeout_ms()),
             )
         except dbus.exceptions.DBusException as e:
             log.error("libnotify Notify (ANCS) failed: %s", e.get_dbus_name())
@@ -553,7 +570,8 @@ class LibnotifySink:
         # Only propagate read-state to iPhone when the human actively
         # dismissed (reason=2). Don't loop on programmatic close (reason=3,
         # which is fired when we closed it ourselves because iPhone already
-        # marked it read).
+        # marked it read), and don't treat auto-expire (reason=1) as a read
+        # — the user may not have seen it.
         if reason_i != _REASON_DISMISSED:
             return
         try:

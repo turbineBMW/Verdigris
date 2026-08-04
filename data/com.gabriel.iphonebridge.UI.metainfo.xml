@@ -4,15 +4,15 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-or-later</project_license>
 
-  <name>Messages</name>
-  <summary>Your iPhone's messages, notifications, and calls on the Linux desktop</summary>
+  <name>Blue</name>
+  <summary>Your iPhone's messages, calls, and notifications on Linux</summary>
 
   <description>
     <p>
-      iphonebridge brings a paired iPhone to the Linux desktop over standard
+      Blue brings a paired iPhone to the Linux desktop over standard
       Bluetooth profiles — no Mac relay, no cloud service, no subscription.
     </p>
-    <p>This app is the graphical front-end for the iphonebridge daemon:</p>
+    <p>This app is the graphical front-end for the Blue daemon:</p>
     <ul>
       <li>Read SMS and iMessage conversations and send replies</li>
       <li>A live feed of every app's notifications, mirrored over ANCS</li>
@@ -22,6 +22,7 @@
   </description>
 
   <launchable type="desktop-id">com.gabriel.iphonebridge.Qt.desktop</launchable>
+  <icon type="stock">com.gabriel.iphonebridge.Qt</icon>
 
   <categories>
     <category>Network</category>
@@ -32,6 +33,7 @@
   <url type="bugtracker">https://github.com/gutbash/blue/issues</url>
 
   <provides>
+    <binary>blue-qt</binary>
     <binary>iphonebridge-qt</binary>
   </provides>
 

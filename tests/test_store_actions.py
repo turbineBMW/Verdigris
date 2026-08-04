@@ -120,3 +120,59 @@ def test_actions_are_dropped_when_no_thread_is_open(store):
     store._current = ""
     store.react(GUID, "Heart")
     assert store._client.calls == []
+
+
+def test_group_reply_targets_the_participant_set(store):
+    """Groups have phone=None; reply must still reach every other member.
+
+    `_peer` used to return None for groups, so reply/react/edit all no-op'd
+    silently — the exact failure reported for "the fucky".
+    """
+    gkey = (
+        "imessage-group:tel:+12155550001,tel:+12155550002,tel:+12155550003"
+    )
+    store._current = gkey
+    store._threads[gkey] = {
+        "key": gkey,
+        "phone": None,
+        "is_group": True,
+        "messages": [{"guid": GUID, "body": "who is free?"}],
+    }
+    store._by_guid = {GUID: store._threads[gkey]["messages"][0]}
+
+    store.replyTo(GUID, "I am")
+    assert store._client.calls == [
+        ("send_reply", (
+            "tel:+12155550001,tel:+12155550002,tel:+12155550003",
+            "I am",
+            GUID,
+            "who is free?",
+        ))
+    ]
+
+
+def test_group_send_uses_the_same_participant_set(store):
+    gkey = "imessage-group:tel:+12155550001,tel:+12155550002"
+    store._current = gkey
+    store._threads[gkey] = {
+        "key": gkey, "phone": None, "is_group": True, "messages": [],
+    }
+    store.send("hello group")
+    assert store._client.calls == [
+        ("send_message", (
+            "tel:+12155550001,tel:+12155550002", "hello group",
+        ))
+    ]
+
+
+def test_group_without_imessage_key_cannot_send(store):
+    """Legacy/unknown group keys have no participant list we can address."""
+    store._current = "any;+;chat123"
+    store._threads["any;+;chat123"] = {
+        "key": "any;+;chat123", "phone": None, "is_group": True,
+        "messages": [{"guid": GUID, "body": "x"}],
+    }
+    store._by_guid = {GUID: store._threads["any;+;chat123"]["messages"][0]}
+    store.send("nope")
+    store.replyTo(GUID, "nope")
+    assert store._client.calls == []

@@ -175,6 +175,49 @@ def test_image_row_without_mime_uses_extension():
     assert rows[0]["image"] == "file:///tmp/photo.jpg"
     # Name kept so QML can fall back to a file chip if decode fails.
     assert rows[0]["fileLabel"] == "photo.jpg"
+    assert rows[0]["animated"] is False
+
+
+def test_gif_row_is_marked_animated():
+    """QML needs `animated` so free-standing media uses AnimatedImage."""
+    from iphonebridge.qtui.models import _is_animated_att
+
+    assert _is_animated_att({"mime": "image/gif", "name": "x.bin", "path": ""})
+    assert _is_animated_att({"mime": "", "name": "loop.gif", "path": ""})
+    assert _is_animated_att({
+        "mime": "", "name": "payload", "path": "/tmp/clip.gif",
+    })
+    assert not _is_animated_att({
+        "mime": "image/png", "name": "x.png", "path": "/tmp/x.png",
+    })
+
+    store = _rows_store()
+    rows = store._rows_for(_row_msg("", [{
+        "path": "/tmp/funny.gif",
+        "name": "funny.gif",
+        "mime": "image/gif",
+        "is_sticker": False,
+        "w": 200,
+        "h": 150,
+    }]), None)
+    assert [r["kind"] for r in rows] == ["image"]
+    assert rows[0]["animated"] is True
+    assert rows[0]["image"] == "file:///tmp/funny.gif"
+
+
+def test_animated_gif_sticker_is_marked_too():
+    """Stickers can be GIF loops; they share the media path in QML."""
+    store = _rows_store()
+    rows = store._rows_for(_row_msg("", [{
+        "path": "/tmp/sticker.gif",
+        "name": "sticker.gif",
+        "mime": "image/gif",
+        "is_sticker": True,
+        "w": 100,
+        "h": 100,
+    }]), None)
+    assert [r["kind"] for r in rows] == ["sticker"]
+    assert rows[0]["animated"] is True
 
 
 def test_image_without_path_is_a_file_chip_not_invisible_media():
