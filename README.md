@@ -415,7 +415,9 @@ If you also run OpenBubbles, stop one of them — they cannot share the same App
 
 ## Credits
 
-Blue builds on two GPL-2.0 projects:
+Blue is based on **[gabrielmeir53/iphonebridge](https://github.com/gabrielmeir53/iphonebridge)** by Gabe Shatunovsky.
+
+It also builds on two GPL-2.0 projects:
 
 - **[bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)** — BR/EDR-vs-BLE coexistence, the `LastUsedBearer=le` unlock, and adapter compatibility. ANCS wire-format code in [`src/iphonebridge/ancs/`](src/iphonebridge/ancs/) is derived from their `observer/ancs/` modules.
 - **[pzmarzly/ancs4linux](https://github.com/pzmarzly/ancs4linux)** — the original 2022 ANCS-on-Linux reference.
@@ -424,4 +426,6 @@ The direct iMessage path uses a vendored [rustpush](rust/rustpush/)-based stack 
 
 ## License
 
-[GPL-2.0-or-later](LICENSE) · © 2026 Gabe Shatunovsky
+[GPL-2.0-or-later](LICENSE) · © 2026 Sebastian Gutierrez
+
+
