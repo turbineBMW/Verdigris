@@ -21,7 +21,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 REAL_USER="${SUDO_USER:-$USER}"
-RESULTS_DIR="/home/${REAL_USER}/code/iphonebridge/spike/results"
+RESULTS_DIR="/home/${REAL_USER}/code/verdigris/spike/results"
 mkdir -p "$RESULTS_DIR"
 LOG="$RESULTS_DIR/00_install.log"
 exec > >(tee -a "$LOG") 2>&1

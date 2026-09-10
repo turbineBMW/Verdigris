@@ -45,17 +45,17 @@ from pathlib import Path
 import dbus
 
 # ---- config --------------------------------------------------------------
-# The iPhone's Bluetooth MAC. Auto-read from the installed iphonebridge config
+# The iPhone's Bluetooth MAC. Auto-read from the installed verdigris config
 # if present; otherwise edit this placeholder.
 IPHONE_MAC = "AA:BB:CC:DD:EE:FF"
 
 
 def _load_mac() -> str:
-    env = Path.home() / ".config" / "iphonebridge" / "local.env"
+    env = Path.home() / ".config" / "verdigris" / "local.env"
     if env.is_file():
         for line in env.read_text().splitlines():
             line = line.strip()
-            if line.startswith("IPHONEBRIDGE_MAC="):
+            if line.startswith("VERDIGRIS_MAC="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return IPHONE_MAC
 
@@ -113,7 +113,7 @@ print(f"[+] iPhone MAC : {IPHONE_MAC}", flush=True)
 print(f"[+] PipeWire card: {CARD}", flush=True)
 if IPHONE_MAC == "AA:BB:CC:DD:EE:FF":
     print("[FAIL] No iPhone MAC. Edit IPHONE_MAC at the top of this script, "
-          "or create ~/.config/iphonebridge/local.env with IPHONEBRIDGE_MAC=.",
+          "or create ~/.config/verdigris/local.env with VERDIGRIS_MAC=.",
           flush=True)
     sys.exit(2)
 

@@ -14,8 +14,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject
 
-from iphonebridge.qtui import models as models_mod
-from iphonebridge.qtui.models import ThreadStore, _TYPING_TIMEOUT_SEC
+from verdigris.qtui import models as models_mod
+from verdigris.qtui.models import _TYPING_TIMEOUT_SEC, ThreadStore
 
 
 def _store() -> ThreadStore:

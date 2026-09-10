@@ -8,7 +8,7 @@ side: when we PushMessage to an iMessage-capable recipient, does iOS
 route it as iMessage (blue bubble) or only as SMS (green bubble)?
 
 This script:
-  1. Stops the running iphonebridge daemon (frees the MAP session
+  1. Stops the running verdigris daemon (frees the MAP session
      iPhone allows only one of at a time).
   2. Opens its own MAP session to the iPhone.
   3. Constructs a minimal valid bMessage targeted at TARGET_NUMBER.
@@ -23,8 +23,8 @@ EDIT TARGET_NUMBER below to a number you can verify:
   - Or use a second phone you have (cheap way to verify yourself)
 
 Run:
-  source ~/code/iphonebridge/.venv/bin/activate
-  python3 ~/code/iphonebridge/spike/07_map_send.py
+  source ~/code/verdigris/.venv/bin/activate
+  python3 ~/code/verdigris/spike/07_map_send.py
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ IPHONE_MAC      = "AA:BB:CC:DD:EE:FF"
 # Format: E.164 with country code, e.g. "+15551234567".
 TARGET_NUMBER   = "+15551234567"   # Contact A (known iMessage-capable)
 
-TEST_BODY       = "iphonebridge MAP-send test — please ignore"
+TEST_BODY       = "verdigris MAP-send test — please ignore"
 
 # Transparent=True: send directly without saving to iPhone's outbox.
 # Transparent=False: stage in outbox and rely on the iPhone to push it.
@@ -67,8 +67,8 @@ def bail(msg, code=1):
 print("=== Phase 2b: MAP PushMessage / iMessage routing test ===\n", flush=True)
 
 # 1) Stop daemon to free MAP session
-print("[+] Stopping iphonebridge daemon ...", flush=True)
-subprocess.run(["systemctl", "--user", "stop", "iphonebridge"], check=False)
+print("[+] Stopping verdigris daemon ...", flush=True)
+subprocess.run(["systemctl", "--user", "stop", "verdigris"], check=False)
 time.sleep(2)
 
 # 2) Restart obexd for a clean OBEX state (Phase 0 quirk #2)
@@ -217,5 +217,5 @@ finally:
         print("[+] Session closed.", flush=True)
     except Exception:
         pass
-    print("[+] Restarting iphonebridge daemon ...", flush=True)
-    subprocess.run(["systemctl", "--user", "start", "iphonebridge"], check=False)
+    print("[+] Restarting verdigris daemon ...", flush=True)
+    subprocess.run(["systemctl", "--user", "start", "verdigris"], check=False)

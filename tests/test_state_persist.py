@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from iphonebridge.message_store import STATE_KINDS, MessageStore
-from iphonebridge.sinks.sqlite import SqliteSink
+from verdigris.message_store import STATE_KINDS, MessageStore
+from verdigris.sinks.sqlite import SqliteSink
 
 
 @pytest.fixture
 def sink(tmp_path: Path, monkeypatch):
-    from iphonebridge import config
+    from verdigris import config
 
     db = tmp_path / "messages.sqlite"
     monkeypatch.setattr(config, "MESSAGES_DB", db)
@@ -74,8 +74,8 @@ def test_typing_is_not_persisted(sink: SqliteSink):
 )
 def test_ui_reloads_edit_and_delivery_from_disk(tmp_path: Path, monkeypatch):
     """The whole reason these lines exist."""
-    from iphonebridge import config
-    from iphonebridge.qtui.models import ThreadStore
+    from verdigris import config
+    from verdigris.qtui.models import ThreadStore
 
     db = tmp_path / "messages.sqlite"
     monkeypatch.setattr(config, "MESSAGES_DB", db)
@@ -122,13 +122,13 @@ def test_ui_reloads_edit_and_delivery_from_disk(tmp_path: Path, monkeypatch):
 
     class FakeClient:
         def read_events(self, kinds=None, limit=None, after_id=0):
-            from iphonebridge.qtui.client import DaemonClient
+            from verdigris.qtui.client import DaemonClient
             return DaemonClient.read_events(
                 kinds=kinds, limit=limit, after_id=after_id
             )
 
         def read_events_with_ids(self, kinds=None, limit=None, after_id=0):
-            from iphonebridge.qtui.client import DaemonClient
+            from verdigris.qtui.client import DaemonClient
             return DaemonClient.read_events_with_ids(
                 kinds=kinds, limit=limit, after_id=after_id
             )

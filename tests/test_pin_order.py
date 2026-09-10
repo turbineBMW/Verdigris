@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui.models import ThreadStore
 
 
 def make_store(pinned, rows=None, saves=None):
@@ -85,7 +85,7 @@ def test_load_tolerates_the_old_sorted_format(tmp_path, monkeypatch):
     """The file predates ordering; older builds wrote a plain sorted list."""
     import json
 
-    from iphonebridge.qtui import models
+    from verdigris.qtui import models
 
     f = tmp_path / "pinned_threads.json"
     f.write_text(json.dumps(["b", "a", "a", 7, "c"]))
@@ -95,7 +95,7 @@ def test_load_tolerates_the_old_sorted_format(tmp_path, monkeypatch):
 
 
 def test_load_survives_a_corrupt_file(tmp_path, monkeypatch):
-    from iphonebridge.qtui import models
+    from verdigris.qtui import models
 
     f = tmp_path / "pinned_threads.json"
     f.write_text("{not json")

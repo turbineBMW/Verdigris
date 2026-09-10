@@ -1,10 +1,10 @@
-"""Tests for iphonebridge.obex.bmessage.parse — extracting sender + body
+"""Tests for verdigris.obex.bmessage.parse — extracting sender + body
 from a MAP bMessage envelope."""
 from __future__ import annotations
 
 import textwrap
 
-from iphonebridge.obex.bmessage import parse
+from verdigris.obex.bmessage import parse
 
 
 def _bmsg(sender_tel: str, body: str, status: str = "UNREAD") -> str:

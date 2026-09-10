@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui.models import ThreadStore
 
 
 def store():

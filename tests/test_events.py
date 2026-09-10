@@ -1,4 +1,4 @@
-"""Tests for iphonebridge.events — phone normalization, timestamp parsing,
+"""Tests for verdigris.events — phone normalization, timestamp parsing,
 SmsEvent construction from MAP Message1 properties."""
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from iphonebridge.events import (
+from verdigris.events import (
     SmsEvent,
     normalize_phone,
     parse_map_timestamp,
@@ -154,7 +154,7 @@ class TestSmsSentEvent:
 class TestGroupSent:
     def test_multi_recipient_sets_group_chat_guid(self):
         """Group sends must key on imessage-group:…, not a concat of phones."""
-        from iphonebridge.message_store import thread_key_for
+        from verdigris.message_store import thread_key_for
 
         e = sms_sent_event(
             "tel:+12155550001,tel:+12155550002,tel:+12155550003",

@@ -1,3 +1,8 @@
+# Historical Blue protocol experiments
+
+These observations were inherited by Verdigris from Blue. Names, paths, and example
+messages below describe the original experiments, not the current app.
+
 # Phase 0 — Results & Plan Revisions
 
 **Date:** 2026-05-19  •  **Target:** iPhone 16 Pro Max, iOS 26.5, MAC `AA:BB:CC:DD:EE:FF`

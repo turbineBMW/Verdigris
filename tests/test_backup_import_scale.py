@@ -19,7 +19,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui.models import ThreadStore
 
 N = 12_000
 BUDGET_SEC = 20.0
@@ -36,6 +36,8 @@ def store():
     s._unsorted = set()
     s._current = ""
     s._read_marks = {}
+    s._pending_receipts = {}
+    s._pending_edits = {}
     return s
 
 

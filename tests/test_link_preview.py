@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from iphonebridge import link_preview as lp
-from iphonebridge.emoji_text import body_markup, markup
+from verdigris import link_preview as lp
+from verdigris.emoji_text import body_markup, markup
 
 
 @pytest.fixture()

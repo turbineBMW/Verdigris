@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import MessageListModel, ThreadStore
+from verdigris.qtui.models import MessageListModel, ThreadStore
 
 GROUP_KEY = "imessage-group:tel:+15551110001,tel:+15551110002"
 

@@ -1,10 +1,10 @@
-"""Tests for iphonebridge.obex.map_send.build_bmessage — outgoing
+"""Tests for verdigris.obex.map_send.build_bmessage — outgoing
 bMessage construction. We don't test send_message itself here because
 it needs a live BlueZ obex session; that's the spike's job."""
 from __future__ import annotations
 
-from iphonebridge.obex.bmessage import parse as parse_bmessage
-from iphonebridge.obex.map_send import _byte_stuff, build_bmessage
+from verdigris.obex.bmessage import parse as parse_bmessage
+from verdigris.obex.map_send import _byte_stuff, build_bmessage
 
 
 class TestByteStuff:

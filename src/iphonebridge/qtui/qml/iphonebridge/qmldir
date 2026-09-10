@@ -1,8 +1,0 @@
-module iphonebridge
-singleton Theme 1.0 Theme.qml
-Avatar 1.0 Avatar.qml
-ConversationsPage 1.0 ConversationsPage.qml
-Icon 1.0 Icon.qml
-PlaceholderPage 1.0 PlaceholderPage.qml
-SmoothListView 1.0 SmoothListView.qml
-WindowChrome 1.0 WindowChrome.qml

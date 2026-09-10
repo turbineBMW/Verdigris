@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QCoreApplication, QObject, QTimer
 
-from iphonebridge.qtui.models import MessageListModel, SearchResultModel, ThreadStore
+from verdigris.qtui.models import MessageListModel, SearchResultModel, ThreadStore
 
 
 @pytest.fixture(scope="module")

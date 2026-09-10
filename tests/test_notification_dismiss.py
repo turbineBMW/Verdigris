@@ -16,11 +16,11 @@ must not mark-read on the iPhone.
 """
 from __future__ import annotations
 
-from iphonebridge.events import SmsEvent
-from iphonebridge.imessage.handles import GROUP_KEY_PREFIX, group_key
-from iphonebridge.qtui.models import ThreadStore
-from iphonebridge.sinks import libnotify as libnotify_mod
-from iphonebridge.sinks.libnotify import LibnotifySink
+from verdigris.events import SmsEvent
+from verdigris.imessage.handles import GROUP_KEY_PREFIX, group_key
+from verdigris.qtui.models import ThreadStore
+from verdigris.sinks import libnotify as libnotify_mod
+from verdigris.sinks.libnotify import LibnotifySink
 
 _key = LibnotifySink._peer_key
 

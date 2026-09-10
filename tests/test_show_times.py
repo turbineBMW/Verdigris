@@ -6,8 +6,8 @@ it, being set on the newest outgoing bubble alone.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui.models import MessageListModel
-from iphonebridge.qtui.util import clock_ts
+from verdigris.qtui.models import MessageListModel
+from verdigris.qtui.util import clock_ts
 
 
 def test_the_role_is_exported_to_qml():

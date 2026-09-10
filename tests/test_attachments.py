@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 
-from iphonebridge.imessage.bridge import translate
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.imessage.bridge import translate
+from verdigris.qtui.models import ThreadStore
 
 MY = ["tel:+12155550150"]
 
@@ -152,7 +152,7 @@ def _row_msg(body: str, atts: list[dict]) -> dict:
 
 def test_file_url_percent_encodes_spaces():
     """Spaces in attachment paths must not produce a broken Image source."""
-    from iphonebridge.qtui.models import _file_url
+    from verdigris.qtui.models import _file_url
 
     assert _file_url("/tmp/my photo.png") == "file:///tmp/my%20photo.png"
     assert _file_url("") == ""
@@ -180,7 +180,7 @@ def test_image_row_without_mime_uses_extension():
 
 def test_gif_row_is_marked_animated():
     """QML needs `animated` so free-standing media uses AnimatedImage."""
-    from iphonebridge.qtui.models import _is_animated_att
+    from verdigris.qtui.models import _is_animated_att
 
     assert _is_animated_att({"mime": "image/gif", "name": "x.bin", "path": ""})
     assert _is_animated_att({"mime": "", "name": "loop.gif", "path": ""})

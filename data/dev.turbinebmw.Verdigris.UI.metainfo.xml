@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.turbinebmw.Verdigris.Qt</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+
+  <name>Verdigris</name>
+  <summary>Your iPhone's messages, calls, and notifications on Linux</summary>
+
+  <description>
+    <p>
+      Verdigris brings a paired iPhone to the Linux desktop over standard
+      Bluetooth profiles — no Mac relay, no cloud service, no subscription.
+    </p>
+    <p>Verdigris is a fork of Blue. This is its legacy Qt frontend:</p>
+    <ul>
+      <li>Read SMS and iMessage conversations and send replies</li>
+      <li>A live feed of every app's notifications, mirrored over ANCS</li>
+      <li>Take and place phone calls — caller ID, answer, decline, dial</li>
+      <li>Daemon health and first-run setup guidance</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">dev.turbinebmw.Verdigris.Qt.desktop</launchable>
+  <icon type="stock">dev.turbinebmw.Verdigris.Qt</icon>
+
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+
+
+  <provides>
+    <binary>verdigris-qt</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.4.2" date="2026-07-30">
+      <description>
+        <p>Qt / QML desktop app is the primary UI (GTK front-end removed).
+        Global menu includes Settings → Launch at Login.</p>
+      </description>
+    </release>
+  </releases>
+</component>

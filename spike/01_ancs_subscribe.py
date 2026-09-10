@@ -62,7 +62,7 @@ device_path = f"/org/bluez/{ADAPTER}/dev_{IPHONE_MAC.replace(':','_')}"
 # ---- BLE advertisement (peripheral, solicits ANCS) -----------------------
 
 class AncsAdvert(dbus.service.Object):
-    PATH = "/iphonebridge/ancs_advert"
+    PATH = "/verdigris/ancs_advert"
 
     @dbus.service.method("org.bluez.LEAdvertisement1",
                          in_signature="", out_signature="")

@@ -8,8 +8,8 @@ backup path was setting `sender_name`.
 """
 from __future__ import annotations
 
-from iphonebridge.imessage.handles import GROUP_KEY_PREFIX, group_key
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.imessage.handles import GROUP_KEY_PREFIX, group_key
+from verdigris.qtui.models import ThreadStore
 
 
 def _store() -> ThreadStore:

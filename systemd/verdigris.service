@@ -1,0 +1,29 @@
+[Unit]
+Description=Verdigris — iPhone messages, calls, and notifications on Linux
+After=bluetooth.target graphical-session.target dbus.socket
+Wants=bluetooth.target
+Requires=dbus.socket
+
+[Service]
+Type=simple
+# Source per-machine config (VERDIGRIS_MAC etc.). Leading `-` means
+# the file is optional — the service starts even if it's missing, but
+# `verdigris doctor` will then warn that the MAC isn't configured.
+EnvironmentFile=-%h/.config/verdigris/local.env
+# Setup creates this stable symlink, so the service works regardless of where
+# the repository itself is checked out.
+ExecStart=%h/.local/bin/verdigris run
+Restart=on-failure
+RestartSec=5
+# Wait up to 10s for clean shutdown
+TimeoutStopSec=10
+# Keep journald logs
+StandardOutput=journal
+StandardError=journal
+# Sandboxing: this is a user service; we deliberately don't drop privileges
+# beyond what systemd-user already provides because we need DBus access to
+# org.bluez (system bus) and org.bluez.obex / org.freedesktop.Notifications
+# (session bus).
+
+[Install]
+WantedBy=default.target

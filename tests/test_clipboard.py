@@ -1,9 +1,9 @@
-"""Tests for iphonebridge.clipboard — verification-code detection."""
+"""Tests for verdigris.clipboard — verification-code detection."""
 from __future__ import annotations
 
 import pytest
 
-from iphonebridge.clipboard import extract_verification_code
+from verdigris.clipboard import extract_verification_code
 
 
 class TestExtractVerificationCode:

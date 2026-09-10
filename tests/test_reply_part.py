@@ -10,7 +10,7 @@ is exactly the character count of the message being replied to.
 """
 from __future__ import annotations
 
-from iphonebridge.dbus_service import _reply_part
+from verdigris.dbus_service import _reply_part
 
 
 def test_part_encodes_the_targets_length():

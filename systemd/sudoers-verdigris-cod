@@ -1,0 +1,12 @@
+# Template used by install-cod-sudoers.sh.  Allow the verdigris user daemon
+# to set the adapter CoD without a
+# password prompt. The single specific command is the only thing this
+# rule unlocks — btmgmt with any other arguments still requires a
+# password. See spike/RESULTS.md §1 for why this command is load-bearing.
+#
+# The installer replaces both @...@ placeholders before validating and
+# installing this file. Install with:
+#   sudo bash systemd/install-cod-sudoers.sh
+# (sudo visudo-checks the file before copying it into /etc/sudoers.d/)
+
+@VERDIGRIS_USER@ ALL=(root) NOPASSWD: @BTMGMT_PATH@ class 4 8

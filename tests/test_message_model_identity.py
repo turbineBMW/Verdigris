@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from iphonebridge.qtui.models import MessageListModel, ThreadStore
+from verdigris.qtui.models import MessageListModel, ThreadStore
 
 
 @pytest.fixture

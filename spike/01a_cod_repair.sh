@@ -24,7 +24,7 @@ BAK=/etc/bluetooth/main.conf.bak.$TS
 NEW_CLASS=0x240408
 IPHONE_MAC="AA:BB:CC:DD:EE:FF"
 REAL_USER="${SUDO_USER:-$USER}"
-RESULTS=/home/${REAL_USER}/code/iphonebridge/spike/results
+RESULTS=/home/${REAL_USER}/code/verdigris/spike/results
 LOG=$RESULTS/01a_cod_repair.log
 
 mkdir -p "$RESULTS"

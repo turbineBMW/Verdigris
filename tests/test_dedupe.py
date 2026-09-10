@@ -6,7 +6,7 @@ notification, and MAP genuinely echoed back messages we had just sent.
 """
 from __future__ import annotations
 
-from iphonebridge.dedupe import (
+from verdigris.dedupe import (
     TRANSPORT_IMESSAGE,
     TRANSPORT_MAP,
     TRANSPORT_SENT,
@@ -14,7 +14,7 @@ from iphonebridge.dedupe import (
     normalize_body,
     transport_of,
 )
-from iphonebridge.events import SmsEvent
+from verdigris.events import SmsEvent
 
 
 def ev(body, *, raw_type="SMS_GSM", sender="12155550150", kind="sms_received"):

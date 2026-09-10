@@ -6,7 +6,7 @@ a "peer" without excluding it files the message under the wrong person.
 """
 from __future__ import annotations
 
-from iphonebridge.imessage.bridge import translate
+from verdigris.imessage.bridge import translate
 
 ME_EMAIL = "mailto:me@icloud.com"
 ME_PHONE = "tel:+12155550100"

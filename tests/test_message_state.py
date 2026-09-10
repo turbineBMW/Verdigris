@@ -14,8 +14,8 @@ import json
 
 import pytest
 
-from iphonebridge.dbus_service import _extras_dict, _variant_dict
-from iphonebridge.imessage.bridge import IMessageExtras, translate
+from verdigris.dbus_service import _extras_dict, _variant_dict
+from verdigris.imessage.bridge import IMessageExtras, translate
 
 MY_HANDLES = ["mailto:me@icloud.com", "tel:+12155550100"]
 THEM = "tel:+12155550150"
@@ -85,7 +85,7 @@ class FakeService:
 @pytest.fixture
 def daemon():
     """A bare object carrying only what _emit_state touches."""
-    from iphonebridge.daemon import Daemon
+    from verdigris.daemon import Daemon
 
     d = object.__new__(Daemon)
     d._dbus_service = FakeService()
@@ -123,7 +123,7 @@ def test_state_routes_to_the_other_party_not_ourselves(daemon):
 
 def test_unknown_receipt_is_ignored_not_emitted(daemon):
     """Apple adds message types; an unrecognised one must not become a state."""
-    from iphonebridge.imessage.bridge import Translated
+    from verdigris.imessage.bridge import Translated
 
     daemon._emit_state(Translated(event=None, extras=None, receipt="SomethingNew"))
     assert daemon._dbus_service.states == []

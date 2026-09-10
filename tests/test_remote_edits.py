@@ -13,7 +13,7 @@ next reload.
 """
 from __future__ import annotations
 
-from iphonebridge.imessage.bridge import translate
+from verdigris.imessage.bridge import translate
 
 MY = ["tel:+12155550150"]
 GROUP = ["tel:+12155550150", "tel:+12155550102", "tel:+12155550103"]
@@ -47,7 +47,7 @@ class _Recorder:
 
 def _daemon(rec):
     """A Daemon with only the fields _emit_remote_edit touches."""
-    from iphonebridge.daemon import Daemon
+    from verdigris.daemon import Daemon
     d = Daemon.__new__(Daemon)
     d._dbus_service = rec
     d.sinks = []

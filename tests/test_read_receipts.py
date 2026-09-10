@@ -15,8 +15,8 @@ import types
 
 import pytest
 
-from iphonebridge import config
-from iphonebridge.dbus_service import MessagesService
+from verdigris import config
+from verdigris.dbus_service import MessagesService
 
 
 class FakeIMessage:

@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            python3-dbus python3-gi python3-venv python3-pip
+            python3-dbus python3-gi python3-venv python3-pip libegl1 libopengl0 libxkbcommon0
           # bluez and bluez-obexd are not strictly required for the unit
           # tests (which are pure parsers) but install them anyway so any
           # future integration test can run too.
@@ -26,14 +26,14 @@ jobs:
           python3 -m venv --system-site-packages .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,qt]"
 
       - name: Verify imports of dbus-bound modules
         run: |
           source .venv/bin/activate
-          python -c "from iphonebridge.daemon import Daemon; print('daemon ok')"
-          python -c "from iphonebridge.obex.map_send import build_bmessage; print('map_send ok')"
-          python -c "from iphonebridge.dbus_service import MessagesService; print('dbus_service ok')"
+          python -c "from verdigris.daemon import Daemon; print('daemon ok')"
+          python -c "from verdigris.obex.map_send import build_bmessage; print('map_send ok')"
+          python -c "from verdigris.dbus_service import MessagesService; print('dbus_service ok')"
 
       - name: pytest
         run: |
@@ -44,3 +44,34 @@ jobs:
         run: |
           source .venv/bin/activate
           ruff check src/ tests/
+
+  native:
+    runs-on: ubuntu-24.04
+    # Ubuntu 24.04's GTK is older than the native app's GTK 4.18 requirement.
+    container: fedora:43
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - name: Install native build and display-test dependencies
+        run: >-
+          dnf install -y git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel
+          sqlite-devel openssl-devel python3 python3-gobject dbus-daemon dbus-tools
+          xorg-x11-server-Xvfb xorg-x11-xauth libXtst ImageMagick
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Format and lint
+        run: |
+          cargo fmt --manifest-path rust/verdigris-apps/Cargo.toml --check
+          cargo clippy --manifest-path rust/verdigris-apps/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Tests and app binaries
+        run: |
+          cargo test --manifest-path rust/verdigris-apps/Cargo.toml --locked
+          cargo build --manifest-path rust/verdigris-apps/Cargo.toml --bins --locked
+      - name: GTK and D-Bus smoke test
+        run: >-
+          dbus-run-session --config-file=rust/verdigris-apps/tests/dbus.conf --
+          xvfb-run -a -s '-screen 0 1280x850x24'
+          python3 rust/verdigris-apps/tests/smoke.py

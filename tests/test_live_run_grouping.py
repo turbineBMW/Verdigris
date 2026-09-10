@@ -9,7 +9,7 @@ hid it, because that path rebuilds every row knowing what follows.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui.models import MessageListModel, ThreadStore
+from verdigris.qtui.models import MessageListModel, ThreadStore
 
 
 def _msg(ts: str, sender: str = "aiden", outgoing: bool = False,

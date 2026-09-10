@@ -1,0 +1,24 @@
+/* Layout and message styling ported from Bubo. */
+
+            .verdigris-bubble { padding: 8px 12px; border-radius: 16px; }
+            .verdigris-me { background: var(--accent-bg-color); color: var(--accent-fg-color); }
+            .verdigris-them { background: alpha(currentColor, 0.08); }
+            .verdigris-image { border-radius: 16px; }
+            .verdigris-entry-frame { border-radius: 18px; border: 1px solid alpha(currentColor, 0.15); background: alpha(currentColor, 0.05); }
+            .verdigris-entry-frame:focus-within { border-color: var(--accent-bg-color); }
+            .verdigris-entry, .verdigris-entry text { background: transparent; }
+            /* the scrolled window otherwise reserves the scrollbar slider's 40px minimum, so an empty composer would start two lines tall */
+            .verdigris-entry-frame scrollbar, .verdigris-entry-frame scrollbar slider { min-height: 0; }
+            .verdigris-gif-btn { font-size: 0.7em; font-weight: bold; padding: 0 6px; }
+            .verdigris-gif-tile { padding: 0; border-radius: 8px; }
+            .verdigris-gif-tile picture { border-radius: 8px; }
+            .verdigris-thread row { background: transparent; border: none; box-shadow: none; padding: 0; margin: 2px 0; }
+            .verdigris-meta { font-size: 0.8em; opacity: 0.7; }
+            .verdigris-snippet { opacity: 0.7; }
+            .verdigris-convs row { padding: 10px 10px; }
+            .verdigris-badge { background: var(--accent-bg-color); color: var(--accent-fg-color); border-radius: 999px;
+                          min-width: 8px; min-height: 8px; padding: 2px; font-size: 0.65em; font-weight: bold;
+                          border: 2px solid var(--window-bg-color); margin: -2px; }
+            .navigation-sidebar row:selected .verdigris-badge { border-color: transparent; }
+
+.call-number { font-size: 28px; }

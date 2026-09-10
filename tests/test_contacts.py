@@ -1,10 +1,10 @@
-"""Tests for iphonebridge.contacts._parse_vcards — extracting name+phones
+"""Tests for verdigris.contacts._parse_vcards — extracting name+phones
 from a PBAP vCard blob."""
 from __future__ import annotations
 
 import textwrap
 
-from iphonebridge.contacts import _parse_vcards
+from verdigris.contacts import _parse_vcards
 
 
 def test_single_vcard():

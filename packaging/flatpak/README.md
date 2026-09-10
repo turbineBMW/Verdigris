@@ -1,13 +1,15 @@
-# Flatpak packaging — desktop UI
+# Verdigris Flatpak packaging (archived draft)
 
-> **Status: outdated.** The GTK `iphonebridge-ui` front-end has been removed.
-> The desktop app is now **`iphonebridge-qt`** (PySide6 / QML). This manifest
-> still targets the old GTK entry point and needs a rewrite (likely KDE
-> runtime + PySide6) before it can build.
+Verdigris is a fork of [Blue](https://github.com/gutbash/blue). This directory
+contains an inherited manifest for the removed Python GTK frontend. Its identifiers
+have been renamed, but it is **not a working package for the native Rust apps**.
 
-This packages **only the desktop app**. The daemon stays a native install: it
-needs privileged setup — `btmgmt` Class-of-Device, the `LastUsedBearer=le`
-file edit, oFono — that a Flatpak sandbox cannot do. The sandboxed UI reaches
-the native daemon over the session bus (`--talk-name=com.gabriel.iphonebridge`).
+Use [the native installer](../../README.md#install) for Phone and Messages.
+A future Flatpak package needs GTK 4.18+, libadwaita 1.7+, the Rust apps, separate
+Phone/Messages launchers, and access to the shared sync service and desktop keyring.
+Settings must remain accessible only through the apps.
 
-Do not ship this manifest as-is until it is retargeted at `iphonebridge-qt`.
+The Bluetooth backend stays outside the sandbox: it needs access to BlueZ,
+oFono, and privileged adapter setup. The fork uses
+`dev.turbinebmw.Verdigris.Bridge` for its session-bus service. Do not ship the
+inherited manifest as-is.

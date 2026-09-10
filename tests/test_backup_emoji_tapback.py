@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from iphonebridge.backup.imessage_db import REMOVED_EMOJI_VERB, read_messages
+from verdigris.backup.imessage_db import REMOVED_EMOJI_VERB, read_messages
 
 _SCHEMA = """
 CREATE TABLE message (

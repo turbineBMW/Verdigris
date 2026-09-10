@@ -8,7 +8,7 @@ hours, with nothing in the log to explain it. The helper now reports the loss
 """
 from __future__ import annotations
 
-from iphonebridge.daemon import Daemon
+from verdigris.daemon import Daemon
 
 
 def _daemon():

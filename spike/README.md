@@ -1,6 +1,6 @@
 # Phase 0 — Feasibility Spike
 
-Throwaway scripts that prove each of the four Bluetooth profiles works against **the user's iPhone 16 Pro Max (iOS 26.5)** before committing engineering time to the full iphonebridge app.
+Throwaway scripts that prove each of the four Bluetooth profiles works against **the user's iPhone 16 Pro Max (iOS 26.5)** during the original Blue project. Verdigris is a fork of [Blue](https://github.com/gutbash/blue) and keeps these scripts as protocol references.
 
 Plan reference: `/home/gabrielmeir53/.claude/plans/steady-crunching-lynx.md`
 
@@ -50,5 +50,5 @@ key observation.
 ## Tearing down
 
 After Phase 0, if we proceed to Phase 1, the spike directory stays in git as a
-historical reference. If we abandon, just remove `~/code/iphonebridge/`.
+historical reference. These are diagnostic scripts, not part of the native app installation.
 `bluez-obexd` is left installed — it's harmless and tiny.

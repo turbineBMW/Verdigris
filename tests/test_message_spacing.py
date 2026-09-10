@@ -6,8 +6,8 @@ tell them apart below the one-hour mark where the time divider takes over.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui import models
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui import models
+from verdigris.qtui.models import ThreadStore
 
 
 def _store() -> ThreadStore:

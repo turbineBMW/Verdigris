@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from iphonebridge.events import SmsEvent
-from iphonebridge.message_store import MESSAGE_KINDS, STATE_KINDS, MessageStore
-from iphonebridge.sinks.sqlite import SqliteSink
+from verdigris.events import SmsEvent
+from verdigris.message_store import MESSAGE_KINDS, STATE_KINDS, MessageStore
+from verdigris.sinks.sqlite import SqliteSink
 
 
 @pytest.fixture
 def store(tmp_path: Path, monkeypatch) -> MessageStore:
-    from iphonebridge import config
+    from verdigris import config
 
     db = tmp_path / "messages.sqlite"
     monkeypatch.setattr(config, "MESSAGES_DB", db)
@@ -139,8 +139,9 @@ def test_state_persists_and_skips_typing(store: MessageStore):
 
 
 def test_sqlite_sink_writes_event_and_state(tmp_path: Path, monkeypatch):
-    from iphonebridge import config
     from datetime import datetime, timezone
+
+    from verdigris import config
 
     db = tmp_path / "messages.sqlite"
     monkeypatch.setattr(config, "MESSAGES_DB", db)
@@ -306,7 +307,7 @@ def test_after_id_incremental(store: MessageStore):
 
 
 def test_migrate_from_jsonl(tmp_path: Path, monkeypatch):
-    from iphonebridge import config
+    from verdigris import config
 
     db = tmp_path / "messages.sqlite"
     events = tmp_path / "events.jsonl"
@@ -356,8 +357,8 @@ def test_migrate_from_jsonl(tmp_path: Path, monkeypatch):
 )
 def test_ui_reloads_edit_and_delivery_from_sqlite(tmp_path: Path, monkeypatch):
     """State rows in SQLite rebuild captions/text after a restart."""
-    from iphonebridge import config
-    from iphonebridge.qtui.models import ThreadStore
+    from verdigris import config
+    from verdigris.qtui.models import ThreadStore
 
     db = tmp_path / "messages.sqlite"
     monkeypatch.setattr(config, "MESSAGES_DB", db)
@@ -401,13 +402,13 @@ def test_ui_reloads_edit_and_delivery_from_sqlite(tmp_path: Path, monkeypatch):
 
     class FakeClient:
         def read_events(self, kinds=None, limit=None, after_id=0):
-            from iphonebridge.qtui.client import DaemonClient
+            from verdigris.qtui.client import DaemonClient
             return DaemonClient.read_events(
                 kinds=kinds, limit=limit, after_id=after_id
             )
 
         def read_events_with_ids(self, kinds=None, limit=None, after_id=0):
-            from iphonebridge.qtui.client import DaemonClient
+            from verdigris.qtui.client import DaemonClient
             return DaemonClient.read_events_with_ids(
                 kinds=kinds, limit=limit, after_id=after_id
             )

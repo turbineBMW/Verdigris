@@ -7,11 +7,11 @@ and turned "￼This mf so cute dawg" into a caption with a glued-on image.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui.models import (
+from verdigris.qtui.models import (
     _INLINE_MEDIA,
     _OBJ_REPLACEMENT,
-    _body_with_inline_media,
     ThreadStore,
+    _body_with_inline_media,
 )
 
 
@@ -81,7 +81,7 @@ def test_f00a_inline_media_lives_in_the_text_bubble():
     assert rows[0]["jumbo"] is False
     # As tall as the bubble text (13px), not a free-standing tile.
     assert 'height="13"' in rows[0]["richBody"]
-    assert 'width="13"' in rows[0]["richBody"]  # square 320×320
+    assert 'width="13"' in rows[0]["richBody"]  # square 320x320
 
 
 def test_f00a_accepts_non_sticker_images():

@@ -1,3 +1,23 @@
+# Verdigris changelog
+
+## Unreleased — Verdigris fork
+
+- Forked from [Blue](https://github.com/gutbash/blue), preserving its Git history
+  and upstream attribution.
+- Added native Rust/GTK4/libadwaita Phone and Messages apps with internal Settings,
+  a shared BlueBubbles sync service, contact photos, cached history and attachments.
+- Ported Bubo's conversation layout, multiline composer, emoji picker, GIF search,
+  and animated previews; added custom Phone and Messages icons.
+- Added a user-local release installer, native Blue cache migration, renamed
+  binaries/app IDs/services, and removed the standalone Settings launcher.
+- Included Bluetooth/ANCS setup, notification icon, and optional HFP improvements
+  developed in the working tree before the fork.
+
+## Inherited Blue history
+
+The entries below describe upstream releases and retain their original names and
+paths. They are historical records, not current installation instructions.
+
 # Changelog
 
 ## [Unreleased]
@@ -28,7 +48,7 @@ Two subsystems that did not exist at 0.1.0, plus the app that renders them.
   the bubble. There is no separate Search menu or Find dialog.
 
 ### Added
-- **Direct iMessage transport** (`ib-imessage`, Rust) — speaks to Apple through
+- **Direct iMessage transport** (`iphonebridge-imessage`, Rust) — speaks to Apple through
   rustpush over its own systemd unit, giving guids, replies, edits, unsends,
   tapbacks, typing indicators, attachments and receipts. MAP carries none of
   these; it delivers incoming text and nothing more.
@@ -47,6 +67,10 @@ Two subsystems that did not exist at 0.1.0, plus the app that renders them.
   only theirs off.
 
 ### Fixed
+- ANCS popups now identify the actual iPhone source app instead of grouping
+  Wallet, Reminders, and every other app under "Messages". Their notification
+  title/body fields are laid out separately, and app icons resolve from local
+  bundle-ID overrides, matching desktop apps, or category-specific fallbacks.
 - True inline media (U+F00A in the body, e.g. "3-0 on my return") is drawn
   inside the text bubble. Free-standing Bitmoji/peels (U+FFFC) stay their own
   rows, with the placeholder glyph stripped from the caption.
@@ -113,7 +137,7 @@ against iPhone 16 Pro Max running iOS 26.5.
   incoming messages
 - systemd user service for autostart, graceful degradation when iPhone
   toggles are off, automatic retry every 60s
-- DBus service `com.gabriel.iphonebridge.Messages1` with Send,
+- DBus service `dev.turbinebmw.Blue.Bridge.Messages1` with Send,
   ListRecent, IsHealthy methods
 - CLI: `run`, `doctor`, `pair-setup`, `sms-list`, `sms-send`,
   `contacts-sync`, `version`
@@ -164,7 +188,7 @@ against iPhone 16 Pro Max running iOS 26.5.
 - New `src/iphonebridge/ui/` package; `DaemonClient` subscribes to the
   daemon's live signals and reads history from `events.jsonl`.
 - Daemon broadcasts a live event feed on a new D-Bus interface
-  `com.gabriel.iphonebridge.Events1` (`MessageReceived`, `MessageSeen`,
+  `dev.turbinebmw.Blue.Bridge.Events1` (`MessageReceived`, `MessageSeen`,
   `AncsNotification` signals) for the UI to consume.
 - `data/` — `.desktop` entry, AppStream metainfo, and an app icon.
 
@@ -179,7 +203,7 @@ against iPhone 16 Pro Max running iOS 26.5.
   buttons; caller ID is resolved against the contacts cache.
 - New CLI: `call <number|contact>`, `hangup`, `calls`, and `hfp-enable`
   (writes the WirePlumber config that routes HFP through oFono).
-- New D-Bus interface `com.gabriel.iphonebridge.Calls1` — `Dial`,
+- New D-Bus interface `dev.turbinebmw.Blue.Bridge.Calls1` — `Dial`,
   `AnswerCall`, `HangupCall`, `HangupAll`, `ListCalls`, and a
   `CallStateChanged` signal.
 - Daemon: sinks now initialise independently of the MAP/PBAP sessions, so

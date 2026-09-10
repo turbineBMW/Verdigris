@@ -12,7 +12,7 @@ discoverable + pairable), then watches what shows up under
 /org/bluez/hci0/dev_<MAC>/ once the user pairs from the iPhone side.
 
 Preconditions (run these in the shell BEFORE this script):
-  1. systemctl --user stop iphonebridge
+  1. systemctl --user stop verdigris
   2. bluetoothctl remove AA:BB:CC:DD:EE:FF
   3. On iPhone: Settings → Bluetooth → tap (i) next to pop-os → Forget
   4. sudo systemctl restart bluetooth.service     # clears orphan adverts
@@ -243,5 +243,5 @@ try:
 except KeyboardInterrupt:
     stop()
 
-print("\n[+] Done. Re-start iphonebridge with: systemctl --user start iphonebridge",
+print("\n[+] Done. Re-start verdigris with: systemctl --user start verdigris",
       flush=True)

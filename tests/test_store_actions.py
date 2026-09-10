@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui.models import ThreadStore
 
 PEER = "+12155550150"
 GUID = "GUID-1"
@@ -39,6 +39,7 @@ def store():
     # latter. Bypassing __init__ still avoids the D-Bus and file watchers.
     s = ThreadStore.__new__(ThreadStore)
     s._client = FakeClient()
+    s._rebuild_messages = lambda: None  # Argument-order tests have no Qt model.
     s._current = "them"
     s._threads = {
         "them": {"phone": PEER, "messages": [{"guid": GUID, "body": "hi there"}]}

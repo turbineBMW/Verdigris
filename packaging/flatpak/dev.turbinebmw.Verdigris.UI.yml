@@ -1,0 +1,62 @@
+# Flatpak manifest — verdigris-ui (the GTK4 desktop app only).
+#
+# The daemon is deliberately NOT packaged here: it needs privileged setup
+# (adapter Class-of-Device via btmgmt, the BLE-bearer file edit, oFono) that
+# cannot run inside a Flatpak sandbox. Install the daemon natively (see the
+# repo README); this Flatpak is the UI, which reaches the native daemon over
+# the session bus.
+#
+# STATUS: draft — not yet built. See packaging/flatpak/README.md for the
+# build steps and the one open issue the build must resolve (the UI's
+# dbus-python / system-bus import).
+
+id: dev.turbinebmw.Verdigris.UI
+runtime: org.gnome.Platform
+runtime-version: '47'   # bump to the current stable GNOME runtime
+sdk: org.gnome.Sdk
+command: verdigris-ui
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Reach the native verdigris daemon — it owns this name on the session bus.
+  - --talk-name=dev.turbinebmw.Verdigris.Bridge
+  # Desktop notifications.
+  - --talk-name=org.freedesktop.Notifications
+  # Read the daemon's config + state files (local.env, events.jsonl,
+  # contacts.sqlite). XDG dirs, read-only.
+  - --filesystem=xdg-config/verdigris:ro
+  - --filesystem=xdg-state/verdigris:ro
+
+cleanup:
+  - '*.a'
+  - '*.la'
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+
+modules:
+  # dbus-python is not in the GNOME runtime. The UI's D-Bus client currently
+  # uses it (via verdigris.bus). The cleaner fix is to port ui/client.py
+  # to GLib GDBus and drop this module entirely — see packaging/flatpak/README.md.
+  - name: python3-dbus
+    buildsystem: meson
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/dbus/dbus-python.git
+        tag: dbus-python-1.3.2
+
+  - name: verdigris-ui
+    buildsystem: simple
+    build-commands:
+      # Install the Python package. The UI entry point is verdigris-ui.
+      # --no-deps: typer is only used by the CLI, which this Flatpak does not
+      # ship; PyGObject + GTK4 + libadwaita come from the GNOME runtime.
+      - pip3 install --prefix=/app --no-deps --no-build-isolation .
+      - install -Dm644 data/dev.turbinebmw.Verdigris.UI.desktop /app/share/applications/dev.turbinebmw.Verdigris.UI.desktop
+      - install -Dm644 data/dev.turbinebmw.Verdigris.UI.metainfo.xml /app/share/metainfo/dev.turbinebmw.Verdigris.UI.metainfo.xml
+      - install -Dm644 data/icons/dev.turbinebmw.Verdigris.UI.svg /app/share/icons/hicolor/scalable/apps/dev.turbinebmw.Verdigris.UI.svg
+    sources:
+      - type: dir
+        path: ../..

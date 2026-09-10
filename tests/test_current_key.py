@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject
 
-from iphonebridge.qtui.models import ThreadStore
+from verdigris.qtui.models import ThreadStore
 
 
 @pytest.fixture

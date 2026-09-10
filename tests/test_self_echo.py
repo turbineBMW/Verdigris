@@ -7,8 +7,8 @@ keep the original blue send and surface the second as incoming.
 """
 from __future__ import annotations
 
-from iphonebridge.daemon import Daemon
-from iphonebridge.imessage.bridge import translate
+from verdigris.daemon import Daemon
+from verdigris.imessage.bridge import translate
 
 MY = ["mailto:me@icloud.com", "tel:+12155550100"]
 SELF = "tel:+12155550100"
@@ -92,7 +92,7 @@ def test_own_number_is_self_recipient():
 
 
 def test_synthetic_self_echo_is_incoming_without_guid():
-    from iphonebridge.events import sms_sent_event
+    from verdigris.events import sms_sent_event
 
     sent = sms_sent_event("+12155550150", "hi", guid=GUID,
                           transfer_path=GUID)

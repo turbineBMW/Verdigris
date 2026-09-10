@@ -8,9 +8,13 @@ meant the last reaction silently replaced the rest.
 """
 from __future__ import annotations
 
-from iphonebridge.qtui.models import (
-    EmojiCompleter, MessageListModel, ThreadStore,
-    _kind_to_reaction_verb, _kind_to_removal_verb, reaction_badges,
+from verdigris.qtui.models import (
+    EmojiCompleter,
+    MessageListModel,
+    ThreadStore,
+    _kind_to_reaction_verb,
+    _kind_to_removal_verb,
+    reaction_badges,
     reaction_emoji,
 )
 

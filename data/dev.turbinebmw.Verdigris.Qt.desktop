@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Verdigris
+GenericName=Messages
+Comment=Your iPhone's messages, calls, and notifications on Linux
+Exec=verdigris-qt
+Icon=dev.turbinebmw.Verdigris.Qt
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;Telephony;Qt;
+Keywords=iPhone;SMS;iMessage;Bluetooth;Calls;Notifications;Messages;Verdigris;
+StartupNotify=true
+StartupWMClass=verdigris-qt

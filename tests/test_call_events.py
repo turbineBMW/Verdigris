@@ -1,4 +1,4 @@
-"""Tests for iphonebridge.hfp.events — CallEvent construction from oFono
+"""Tests for verdigris.hfp.events — CallEvent construction from oFono
 VoiceCall properties, state→kind mapping, caller-ID handling."""
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from iphonebridge.hfp.events import (
+from verdigris.hfp.events import (
     CallEvent,
     call_event_from_ofono,
     kind_for_state,

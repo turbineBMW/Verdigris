@@ -11,8 +11,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from iphonebridge.qtui.models import ThreadStore
-from iphonebridge.qtui.util import receipt_ts
+from verdigris.qtui.models import ThreadStore
+from verdigris.qtui.util import receipt_ts
 
 
 def store():
@@ -213,7 +213,7 @@ def test_failed_edit_is_not_marked_seen_so_hydrate_can_retry():
 
 def test_live_edit_rebuilds_open_conversation_model():
     """Editing while the thread is on screen must repaint the bubble."""
-    from iphonebridge.qtui.models import MessageListModel
+    from verdigris.qtui.models import MessageListModel
 
     s = store()
     s._message_model = MessageListModel()

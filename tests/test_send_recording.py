@@ -11,7 +11,7 @@ import pytest
 
 dbus = pytest.importorskip("dbus")
 
-from iphonebridge.dbus_service import MessagesService  # noqa: E402
+from verdigris.dbus_service import MessagesService  # noqa: E402
 
 
 class FakeIMessage:
@@ -79,7 +79,7 @@ def test_group_send_splits_participants():
     svc = service()
     # Real _participants: the stub above collapsed to [r], which would hide
     # a regression that treated the comma list as a single handle.
-    from iphonebridge.dbus_service import MessagesService
+    from verdigris.dbus_service import MessagesService
     svc._participants = lambda r: MessagesService._participants(svc, r)
 
     recipients = "tel:+12155550001,tel:+12155550002,tel:+12155550003"
@@ -94,7 +94,7 @@ def test_group_send_splits_participants():
 
 def test_group_reply_splits_participants_and_keeps_threading():
     svc = service()
-    from iphonebridge.dbus_service import MessagesService
+    from verdigris.dbus_service import MessagesService
     svc._participants = lambda r: MessagesService._participants(svc, r)
 
     recipients = "tel:+12155550001,tel:+12155550002"
@@ -116,7 +116,7 @@ def test_group_send_does_not_map_fallback_on_imessage_failure():
     handle when the split was missing.
     """
     svc = service()
-    from iphonebridge.dbus_service import MessagesService
+    from verdigris.dbus_service import MessagesService
     svc._participants = lambda r: MessagesService._participants(svc, r)
     svc.sessions = type("S", (), {"map": object(), "map_path": "/map"})()
 
