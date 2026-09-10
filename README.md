@@ -22,9 +22,11 @@ and an optional legacy Qt frontend.
 
 ## Install
 
-From this checkout:
+Clone the repository and run the installer:
 
 ```sh
+git clone https://github.com/turbineBMW/Verdigris.git
+cd Verdigris
 ./install.sh
 ```
 

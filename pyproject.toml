@@ -26,6 +26,11 @@ dependencies = [
   # runs this package should be created with --system-site-packages.
 ]
 
+[project.urls]
+Homepage = "https://github.com/turbineBMW/Verdigris"
+Issues = "https://github.com/turbineBMW/Verdigris/issues"
+Upstream = "https://github.com/gutbash/blue"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=7",

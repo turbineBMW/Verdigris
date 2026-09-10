@@ -30,6 +30,9 @@
   </categories>
 
 
+  <url type="homepage">https://github.com/turbineBMW/Verdigris</url>
+  <url type="bugtracker">https://github.com/turbineBMW/Verdigris/issues</url>
+
   <provides>
     <binary>verdigris-qt</binary>
   </provides>
