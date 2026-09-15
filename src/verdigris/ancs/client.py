@@ -86,8 +86,14 @@ class AncsClient:
         # desktop sinks (including category-specific icon fallbacks).
         self._pending_notifications: dict[int, Notification] = {}
 
-        # Signal subscriptions we need to clean up on stop()
+        # ObjectManager subscriptions — live for the client's lifetime.
         self._signal_matches: list = []
+        # PropertiesChanged receivers on the current NS/DS chars. Torn down
+        # whenever the chars vanish: BlueZ reuses handle paths across LE
+        # reconnects, so a stale receiver left on an old path would wake up
+        # again next time the same path comes back and every notification
+        # would be delivered (NS receivers x DS receivers) times.
+        self._char_matches: list = []
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -117,6 +123,7 @@ class AncsClient:
             except Exception:
                 pass
         self._signal_matches = []
+        self._unsubscribe_chars()
         # StopNotify on the chars if we'd started
         for path in (self._ns_path, self._ds_path):
             if path:
@@ -160,8 +167,18 @@ class AncsClient:
         for attr in ("_ns_path", "_ds_path", "_cp_path"):
             if getattr(self, attr) == path_s:
                 setattr(self, attr, None)
+                self._unsubscribe_chars()
                 self._notify_started = False
                 log.warning("ANCS char gone: %s", path_s)
+
+    def _unsubscribe_chars(self) -> None:
+        """Drop the PropertiesChanged receivers on the NS/DS chars."""
+        for m in self._char_matches:
+            try:
+                m.remove()
+            except Exception:
+                pass
+        self._char_matches = []
 
     def _try_subscribe(self) -> None:
         if self._notify_started:
@@ -184,7 +201,7 @@ class AncsClient:
             log.warning("ANCS StartNotify failed: %s", e.get_dbus_name())
             return
 
-        self._signal_matches.append(
+        self._char_matches.append(
             system_bus.add_signal_receiver(
                 self._on_ns_changed,
                 dbus_interface="org.freedesktop.DBus.Properties",
@@ -192,7 +209,7 @@ class AncsClient:
                 path=self._ns_path,
             )
         )
-        self._signal_matches.append(
+        self._char_matches.append(
             system_bus.add_signal_receiver(
                 self._on_ds_changed,
                 dbus_interface="org.freedesktop.DBus.Properties",
@@ -318,13 +335,6 @@ class AncsClient:
             is_preexisting=source.is_preexisting if source else False,
             positive_action=attrs.positive_action,
             negative_action=attrs.negative_action,
-        )
-        log.info(
-            "ANCS event: app=%r bundle=%r title=%r body=%r",
-            event.app_name or event.app_id,
-            event.app_id,
-            (event.title or "")[:40],
-            (event.body or "")[:60],
         )
         try:
             self.on_event(event)
