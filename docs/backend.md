@@ -320,10 +320,19 @@ ANCS supplies each source app's bundle identifier and display name, so Verdigris
 labels notifications as **Wallet**, **Reminders**, **Slack**, and so on. Classic
 ANCS does not transmit app-icon image data. Verdigris uses a matching installed
 Linux application's icon when one exists, otherwise a category-specific theme
-icon. To provide exact artwork, put a PNG, SVG, WebP, or JPEG named after the
-bundle identifier in `~/.local/state/verdigris/ancs_app_icons/`, for example
-`com.example.SomeApp.png`. The daemon log includes `bundle='…'` for every ANCS
-notification. Set `VERDIGRIS_ANCS_ICON_DIR` to use a different directory.
+icon. Native **Settings → iPhone app notifications** lets you disable a source app,
+choose a Linux app to launch when clicked, and override its icon. These rules apply
+without restarting the updated Verdigris backend; disabled notifications are dropped
+before desktop popups, history sinks, and D-Bus. Only the source app's ID/name is
+retained in the discovered-app registry, so it remains available in Settings.
+
+For manual icon overrides, the existing PNG, SVG, WebP, or JPEG files named after
+the bundle identifier in `~/.local/state/verdigris/ancs_app_icons/` still work
+(for example, `com.example.SomeApp.png`). Set `VERDIGRIS_ANCS_ICON_DIR` to use a
+different directory. An icon selected in native Settings takes precedence. Bundle
+identifiers are shown in each app's notification settings. ANCS does not include a
+Linux-compatible deep link, so click targets open the app without selecting a
+particular conversation.
 </details>
 
 <details>

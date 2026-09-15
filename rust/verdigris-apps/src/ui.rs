@@ -16,6 +16,9 @@ mod compose;
 mod gif_picker;
 mod layout;
 mod media;
+mod notes;
+mod notifications;
+mod reminders;
 
 fn error_text(error: &anyhow::Error) -> String {
     if let Some(zbus::Error::MethodError(_, Some(message), _)) = error.downcast_ref::<zbus::Error>()
@@ -93,7 +96,7 @@ pub fn run(kind: &'static str) {
         .application_id(format!("dev.turbinebmw.Verdigris.{kind}"))
         .build();
     app.connect_activate(move |app| {
-        if matches!(kind, "Messages" | "Phone") {
+        if matches!(kind, "Messages" | "Phone" | "Reminders" | "Notes") {
             gtk::Window::set_default_icon_name(&format!("dev.turbinebmw.Verdigris.{kind}"));
         }
         if let Some(window) = app.active_window() {
@@ -115,6 +118,8 @@ pub fn run(kind: &'static str) {
         match kind {
             "Settings" => settings(app),
             "Phone" => phone(app),
+            "Reminders" => reminders::show(app),
+            "Notes" => notes::show(app),
             _ => messages(app),
         }
     });
@@ -153,7 +158,7 @@ async fn sync_connection() -> Result<zbus::Connection> {
 }
 
 fn settings(app: &adw::Application) {
-    let (win, content, _) = window(app, "Settings", 540, 540);
+    let (win, content, _) = window(app, "Settings", 600, 720);
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::builder()
         .title("Mac connection")
@@ -187,6 +192,8 @@ fn settings(app: &adw::Application) {
     health.set_wrap(true);
     phone_group.add(&health);
     page.add(&phone_group);
+    page.add(&notifications::settings_group(&win));
+    page.add(&reminders::settings_group(&win));
     check.connect_clicked(move |_| {
         let health = health.clone();
         task(

@@ -27,7 +27,7 @@ bin_dir.mkdir(parents=True, exist_ok=True)
 (data / "applications").mkdir(parents=True, exist_ok=True)
 (data / "dbus-1/services").mkdir(parents=True, exist_ok=True)
 (config / "systemd/user").mkdir(parents=True, exist_ok=True)
-for binary in ("verdigris-messages", "verdigris-phone", "verdigris-settings", "verdigris-sync"):
+for binary in ("verdigris-messages", "verdigris-phone", "verdigris-reminders", "verdigris-notes", "verdigris-settings", "verdigris-sync"):
     destination = bin_dir / binary
     target = root / "target" / profile / binary
     if not args.copy and destination.exists() and not destination.is_symlink():
@@ -46,11 +46,12 @@ for binary in ("verdigris-messages", "verdigris-phone", "verdigris-settings", "v
 # Unthemed icons keep the supplied PNGs intact; GTK and launchers scale them to fit.
 icons = data / "icons"
 icons.mkdir(parents=True, exist_ok=True)
-for kind, category in (("Messages", "Chat"), ("Phone", "Telephony")):
+for kind, category in (("Messages", "Chat"), ("Phone", "Telephony"), ("Reminders", "Calendar"), ("Notes", "TextTools")):
     icon = f"dev.turbinebmw.Verdigris.{kind}"
-    shutil.copyfile(root / "data/icons" / f"{icon}.png", icons / f"{icon}.png")
-    (icons / f"{icon}.png").chmod(0o644)
-    categories = f"Network;{category};"
+    extension = "svg" if kind in ("Reminders", "Notes") else "png"
+    shutil.copyfile(root / "data/icons" / f"{icon}.{extension}", icons / f"{icon}.{extension}")
+    (icons / f"{icon}.{extension}").chmod(0o644)
+    categories = f'{"Office" if kind in ("Reminders", "Notes") else "Network"};{category};'
     executable = str(bin_dir / f"verdigris-{kind.lower()}")
     # Desktop Exec quoting is distinct from shell quoting.
     executable = executable.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$')
@@ -87,5 +88,5 @@ if old_sync.exists():
 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
 if shutil.which("update-desktop-database"):
     subprocess.run(["update-desktop-database", str(data / "applications")], check=False)
-print("Installed Messages and Phone. Open Settings from either app to connect your Mac.")
+print("Installed Messages, Phone, Reminders, and Notes. Open Settings from any app to connect your Mac.")
 print("After connection, enable background startup with: systemctl --user enable --now verdigris-sync")
