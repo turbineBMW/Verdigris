@@ -26,9 +26,11 @@ from pathlib import Path
 
 import dbus
 import dbus.exceptions
+from gi.repository import Gio
 
 from verdigris.ancs.events import AncsEvent
 from verdigris.ancs.icons import app_icon as ancs_app_icon
+from verdigris.ancs.preferences import preferences
 from verdigris.avatars import circular as circular_avatar
 from verdigris.bus import session_bus
 from verdigris.config import NOTIFICATION_TIMEOUT_SEC
@@ -86,6 +88,7 @@ class LibnotifySink:
     def __init__(self, hfp=None, send_message=None, contacts=None) -> None:
         # Optional HfpManager — when present, incoming-call popups carry
         # Answer / Decline action buttons wired straight to it.
+        self._ancs_targets: dict[int, str] = {}
         self._hfp = hfp
         # send_message(recipient, body, reply_to_guid="", target_text="") —
         # enables inline reply straight from the notification, which Plasma
@@ -390,6 +393,10 @@ class LibnotifySink:
     # ---- ANCS events (per-app notifications) ----------------------------
 
     def handle_ancs(self, event: AncsEvent) -> None:
+        rule = preferences.rule(event.app_id)
+        if not rule.enabled:
+            return
+        actions = ["default", "Open app"] if rule.desktop_id else []
         # ANCS resolves the app display name separately from the notification
         # attributes.  Pass it as Notify's actual app identity instead of the
         # old hard-coded "Messages" value.
@@ -413,16 +420,21 @@ class LibnotifySink:
             # Same auto-expire as SMS popups. No mark-read sync for ANCS
             # (the iPhone doesn't expose a write-back path for app
             # notification state).
-            self._notif.Notify(
+            nid = self._notif.Notify(
                 app,
                 dbus.UInt32(0),
-                ancs_app_icon(event.app_id, event.app_name, event.category),
+                rule.icon_path() or ancs_app_icon(event.app_id, event.app_name, event.category),
                 title,
                 _escape_markup(body),
-                dbus.Array([], signature="s"),
+                dbus.Array(actions, signature="s"),
                 dbus.Dictionary(hints, signature="sv"),
                 dbus.Int32(_expire_timeout_ms()),
             )
+            if not hasattr(self, "_ancs_targets"):
+                self._ancs_targets = {}
+            self._ancs_targets.pop(int(nid), None)
+            if rule.desktop_id:
+                self._ancs_targets[int(nid)] = event.app_id
         except dbus.exceptions.DBusException as e:
             log.error("libnotify Notify (ANCS) failed: %s", e.get_dbus_name())
 
@@ -502,6 +514,24 @@ class LibnotifySink:
             nid_i = int(nid)
         except (TypeError, ValueError):
             return
+        app_id = getattr(self, "_ancs_targets", {}).get(nid_i)
+        if app_id is not None:
+            if str(action_key) != "default":
+                return
+            # Re-read preferences so disabling/changing a target also applies
+            # to popups that were already visible when Settings was saved.
+            rule = preferences.rule(app_id)
+            if rule.enabled and rule.desktop_id:
+                try:
+                    app = Gio.DesktopAppInfo.new(rule.desktop_id)
+                    if app is not None:
+                        app.launch([], None)
+                    else:
+                        log.warning("Notification target app is no longer installed: %s",
+                                    rule.desktop_id)
+                except Exception:
+                    log.exception("Could not open notification target app")
+            return
         call_path = self._notif_calls.get(nid_i)
         if call_path is None or self._hfp is None:
             return
@@ -546,6 +576,7 @@ class LibnotifySink:
         except (TypeError, ValueError):
             return
 
+        getattr(self, "_ancs_targets", {}).pop(nid_i, None)
         message_path = self._pending.pop(nid_i, None)
         target = self._reply_targets.pop(nid_i, None)
         # Reply targets are dicts (recipient + optional reply_to); older

@@ -78,27 +78,28 @@ def test_installer_renames_launchers_and_keeps_settings_internal(tmp_path, monke
             assert '--locked' in command and '--release' in command
             target = root / 'target/release'
             target.mkdir(parents=True, exist_ok=True)
-            for kind in ('messages', 'phone', 'settings', 'sync'):
+            for kind in ('messages', 'phone', 'reminders', 'notes', 'settings', 'sync'):
                 (target / f'verdigris-{kind}').write_text('#!/bin/sh\nexit 0\n')
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(subprocess, 'run', run)
     for _ in range(2):
         runpy.run_path(str(root / 'install.py'), run_name='__main__')
-    for kind in ('Phone', 'Messages'):
+    for kind in ('Phone', 'Messages', 'Reminders', 'Notes'):
         app_id = f'dev.turbinebmw.Verdigris.{kind}'
         desktop = (apps / f'{app_id}.desktop').read_text()
         assert f'Name={kind}\n' in desktop
         assert f'Icon={app_id}\n' in desktop
         assert f'verdigris-{kind.lower()}' in desktop
-        assert (data / f'icons/{app_id}.png').read_bytes() == (NATIVE / f'data/icons/{app_id}.png').read_bytes()
+        extension = 'svg' if kind in ('Reminders', 'Notes') else 'png'
+        assert (data / f'icons/{app_id}.{extension}').read_bytes() == (NATIVE / f'data/icons/{app_id}.{extension}').read_bytes()
     assert not list(apps.glob('*.Settings.desktop'))
     assert not list(apps.glob('dev.turbinebmw.Blue.*'))
     assert not old_unit.exists()
     assert ['systemctl', '--user', 'disable', '--now', 'blue-native-sync.service'] in calls
     assert (config / 'systemd/user/verdigris-sync.service').exists()
     assert (bin_dir / 'blue').read_text() == 'old Bluetooth backend'
-    for kind in ('messages', 'phone', 'settings', 'sync'):
+    for kind in ('messages', 'phone', 'reminders', 'notes', 'settings', 'sync'):
         installed = bin_dir / f'verdigris-{kind}'
         assert not installed.is_symlink()
         assert installed.stat().st_mode & 0o777 == 0o755

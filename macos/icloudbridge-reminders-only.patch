@@ -1,0 +1,50 @@
+diff --git a/Sources/iCloudBridge/AppState.swift b/Sources/iCloudBridge/AppState.swift
+index dc0e15e..8c56246 100644
+--- a/Sources/iCloudBridge/AppState.swift
++++ b/Sources/iCloudBridge/AppState.swift
+@@ -93,9 +93,7 @@ class AppState: ObservableObject {
+     }
+ 
+     var hasAllPermissions: Bool {
+-        remindersService.authorizationStatus == .fullAccess &&
+-        photosService.authorizationStatus == .authorized &&
+-        calendarsService.authorizationStatus == .fullAccess
++        remindersService.authorizationStatus == .fullAccess
+     }
+ 
+     var hasSavedSettings: Bool {
+diff --git a/Sources/iCloudBridge/Views/OnboardingView.swift b/Sources/iCloudBridge/Views/OnboardingView.swift
+index 2c8af01..201bd7b 100644
+--- a/Sources/iCloudBridge/Views/OnboardingView.swift
++++ b/Sources/iCloudBridge/Views/OnboardingView.swift
+@@ -22,7 +22,7 @@ struct OnboardingView: View {
+                     .font(.title)
+                     .fontWeight(.semibold)
+ 
+-                Text("iCloud Bridge needs access to your Reminders, Photos, and Calendars to expose them via a local API.")
++                Text("Connect Apple Reminders to Verdigris. Grant Reminders access, then choose the lists to share.")
+                     .font(.body)
+                     .foregroundColor(.secondary)
+                     .multilineTextAlignment(.center)
+@@ -37,8 +37,6 @@ struct OnboardingView: View {
+             ScrollView {
+                 VStack(spacing: 16) {
+                     remindersStep
+-                    calendarsStep
+-                    photosStep
+                 }
+                 .padding(30)
+             }
+diff --git a/Sources/iCloudBridge/iCloudBridgeApp.swift b/Sources/iCloudBridge/iCloudBridgeApp.swift
+index 7b4ebeb..d015572 100644
+--- a/Sources/iCloudBridge/iCloudBridgeApp.swift
++++ b/Sources/iCloudBridge/iCloudBridgeApp.swift
+@@ -76,8 +76,6 @@ struct iCloudBridgeApp: App {
+     private func handleOnboardingComplete() {
+         // Reload data now that we have permissions
+         appState.remindersService.loadLists()
+-        appState.photosService.loadAlbums()
+-        appState.calendarsService.loadCalendars()
+ 
+         if appState.hasSavedSettings {
+             // Has saved settings - start server

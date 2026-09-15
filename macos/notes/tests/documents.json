@@ -1,0 +1,66 @@
+[
+  {
+    "name": "emoji-duplicates",
+    "valid": true,
+    "data": "H4sIAAAAAAAC/xMKF2CUChaSCsksyUnl+jB/+SqFzJLUXK7ixNxUCKHFxMGmxc/BIcTNka7AoMXKxZgowAAUYAULMIIEkgQY4QJgFckCDABjtc/fWQAAAA==",
+    "locations": [
+      6,
+      14,
+      19
+    ]
+  },
+  {
+    "name": "split-styles",
+    "valid": true,
+    "data": "H4sIAAAAAAAC/xMyEWCUMhDiccrPSVHIyy/KTczh0uLnYBHi5khXYNBi5WJMFGAACnCgCAAAFol0VzYAAAA=",
+    "locations": [
+      0
+    ]
+  },
+  {
+    "name": "duplicate-id",
+    "valid": false,
+    "data": "H4sIAAAAAAAC/xOSF2CUkhbiyM9L5Sopz+fS4ufgEOLmSFdg0GLlYkwUYAAAFckfCiEAAAA="
+  },
+  {
+    "name": "conflict-runs",
+    "valid": false,
+    "data": "H4sIAAAAAAAC/xPSEWCU0hBiyc9L5dLi52AS4uZIV2DQYuViTBRgQBVIEmAAAFS5oPkuAAAA"
+  },
+  {
+    "name": "short-run",
+    "valid": false,
+    "data": "H4sIAAAAAAAC/xOSFmCUEhdiyc9L5dLi52AW4uZIV2DQYuViTBRgAAD/yE3nHQAAAA=="
+  },
+  {
+    "name": "long-run",
+    "valid": false,
+    "data": "H4sIAAAAAAAC/xOSFmCUEhdiyc9L5dLi52AV4uZIV2DQYuViTBRgAABJg48fHQAAAA=="
+  },
+  {
+    "name": "invalid-done",
+    "valid": false,
+    "data": "H4sIAAAAAAAC/xOSFmCUEhdiyc9L5dLi52AR4uZIV2DQYuViTBRgAgATA45sHQAAAA=="
+  },
+  {
+    "name": "ordinary-text",
+    "valid": true,
+    "data": "H4sIAAAAAAAC/xMSlxIV4g7JLMlJ5XLKT6nk0mLj4BZi4mAAACXXxycZAAAA",
+    "locations": [],
+    "canEditText": true
+  },
+  {
+    "name": "native-bullets",
+    "valid": true,
+    "data": "H4sIAAAAAAAC/xMSlhIUYncqzclJLeHSYuNgF2LiSAUAL4pWlxUAAAA=",
+    "locations": [],
+    "canEditText": false
+  },
+  {
+    "name": "embedded-object",
+    "valid": true,
+    "data": "H4sIAAAAAAAC/xPSktIQ4grJLMlJ5Xq/fw+XlhQHhxATB0OSUFpmRUlpUapuYklJYnJGbmpeCQARHiOzLAAAAA==",
+    "locations": [],
+    "canEditText": false
+  }
+]

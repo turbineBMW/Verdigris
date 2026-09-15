@@ -809,17 +809,33 @@ def calls(verbose: bool = typer.Option(False, "-v", "--verbose")):
 def hfp_enable(verbose: bool = typer.Option(False, "-v", "--verbose")):
     """Set up HFP call support.
 
-    Writes the WirePlumber config that routes HFP/HSP through oFono (so
-    call control is available on D-Bus), restarts WirePlumber, and prints
-    the remaining root-only steps. HFP lets you take and place iPhone
-    calls on the laptop — caller ID, answer/decline, dialing.
+    Uses PipeWire's native telephony backend when available. On older systems,
+    writes the WirePlumber config that routes HFP/HSP through oFono and prints
+    the remaining setup steps. HFP lets you take and place iPhone calls on the
+    laptop — caller ID, answer/decline, dialing.
     """
     _setup_logging(verbose)
     import shutil
     import subprocess
     from pathlib import Path
 
-    from verdigris.hfp.ofono_client import write_wireplumber_config
+    from verdigris.hfp.ofono_client import (
+        native_pipewire_available,
+        write_wireplumber_config,
+    )
+
+    if native_pipewire_available():
+        typer.echo(typer.style(
+            "PipeWire native HFP call control is ready.",
+            fg=typer.colors.GREEN,
+        ))
+        typer.echo("No Bluetooth, pairing, or WirePlumber configuration was changed.")
+        subprocess.run(
+            ["systemctl", "--user", "try-restart", "verdigris"],
+            check=False,
+        )
+        typer.echo("Verdigris restarted if it was already running.")
+        return
 
     path, backup = write_wireplumber_config()
     if backup:

@@ -2,9 +2,25 @@
 
 Verdigris is a fork of [Blue](https://github.com/gutbash/blue). Its native
 Rust/GTK4/libadwaita applications follow Bubo's layout and native stack.
-The desktop launchers are **Phone** and **Messages**; `verdigris-settings` is
-opened internally by either app. `verdigris-sync` owns message synchronization.
+The desktop launchers are **Phone**, **Messages**, **Reminders**, and **Notes**;
+`verdigris-settings` is opened internally by these apps. `verdigris-sync` owns
+message synchronization.
 The inherited Qt frontend and Bluetooth backend remain separate components.
+
+**Reminders** (`verdigris-reminders`) connects separately to the Mac's iCloudBridge
+REST server. It includes list filtering, search, create/edit/complete operations,
+an authenticated live invalidation stream, and a private offline snapshot. A
+15-minute safety refresh remains while the window is open. Configure it in
+**Settings → Reminders and Notes connection**.
+See [Mac installation, SSH tunneling, and feature limits](../../docs/reminders.md).
+
+**Notes** (`verdigris-notes`) shares the Reminders connection and adds folder
+browsing, text search, creation, title/body editing for ordinary notes, offline
+reading, and native checklist controls with conflict recovery. Shared notes use
+the same controls when edit permission is available. A debounced Mac filesystem
+monitor feeds the authenticated invalidation stream, with draft-safe
+reconciliation and a 15-minute safety refresh instead of focused-note polling.
+Install the [Notes companion extension](../../docs/notes.md) on the Mac first.
 
 ```sh
 ./install.sh
@@ -76,7 +92,8 @@ modern macOS requires the Private API and is not exposed by this client yet.
   `dev.turbinebmw.Verdigris.Bridge.Calls1` D-Bus service. A local snapshot every two seconds
   updates the call view. Existing Verdigris notifications and PipeWire audio remain responsible
   for incoming-call alerts and audio.
-- **Settings:** shared Mac URL/password, connection test, and Bluetooth service check.
+- **Settings:** shared Mac URL/password, connection test, Bluetooth service check,
+  and per-iPhone-app notification controls (enable/disable, click target, custom icon).
   Both apps open the same single-instance Settings application. Bluetooth pairing remains
   in the existing `verdigris pair-setup` / `verdigris hfp-enable` tools for this slice.
 - **verdigris-sync:** one shared process owns the cache and synchronization. Socket.IO events,
@@ -140,3 +157,24 @@ and paired iPhone. The Mac server has not been installed remotely by this projec
 Protocol references: [REST API](https://github.com/BlueBubblesApp/bluebubbles-docs/blob/master/server/developer-guides/rest-api-and-webhooks.md),
 [HTTP routers](https://github.com/BlueBubblesApp/bluebubbles-server/tree/master/packages/server/src/server/api/http/api/v1/routers),
 [Socket.IO events](https://github.com/BlueBubblesApp/bluebubbles-server/blob/master/packages/server/src/server/events.ts).
+
+## Notification preferences
+
+Settings lists iPhone apps discovered by the Python Verdigris Bluetooth backend.
+Select an app, change **Allow notifications**, **Open when clicked**, or
+**Notification icon**, then **Save**. The Linux app picker searches installed desktop
+apps. Custom icons accept image formats supported by GdkPixbuf (up to 8 MB) and are
+stored as a 256-pixel PNG; **Use automatic icon** clears the override.
+
+Rules live in `$XDG_CONFIG_HOME/verdigris/notification-rules.json` (normally
+`~/.config/verdigris`) and icons in its `notification-icons` subfolder. The separate
+`$XDG_DATA_HOME/verdigris/notification-apps.json` registry stores only source app IDs
+and names. Settings updates rules atomically; the daemon reloads them for each
+notification and filters disabled apps before forwarding to any sink or D-Bus.
+Malformed rules retain the daemon's last successfully loaded preferences and are
+reported in Settings. No preferences file means all apps are enabled by default.
+
+This feature requires the updated Verdigris backend, even when the native apps can
+otherwise talk to an older Blue backend. ANCS settings do not affect message sync
+or the separate SMS/call alerts. Notification click actions launch the selected
+Linux desktop app; opening a specific conversation is not supported.

@@ -4,7 +4,7 @@
 
 # Verdigris
 
-**Messages and phone calls from your iPhone, on your Linux desktop.**
+**Messages, phone calls, Apple Reminders, and Notes on your Linux desktop.**
 
 A fork of **[Blue](https://github.com/gutbash/blue)**.
 
@@ -14,6 +14,11 @@ Verdigris provides native Rust/GTK4/libadwaita **Messages** and **Phone** apps,
 with shared settings and background message synchronization. Messages connects to
 BlueBubbles Server on your Mac; Phone uses the inherited Bluetooth/HFP backend to
 reach your nearby iPhone.
+
+The native **Reminders** app connects to a separate iCloudBridge companion on your
+Mac, with task creation, editing, completion, and cached viewing offline.
+**Notes** uses the same companion for reading, searching, creating notes, and
+editing ordinary note text and native checklist items.
 
 The native interface follows Bubo's conversation layout, message bubbles, growing
 multiline composer, emoji picker, and searchable GIF grid. The inherited Python
@@ -39,12 +44,14 @@ libadwaita 1.7+ development packages, plus a running systemd user session.
 | --- | --- | --- |
 | `verdigris-messages` | Messages | Conversations, text, attachments, emoji, and GIFs |
 | `verdigris-phone` | Phone | Dial, answer, and end calls through the Bluetooth backend |
+| `verdigris-reminders` | Reminders | Apple reminder lists, task creation, editing, and completion through a Mac bridge |
+| `verdigris-notes` | Notes | Read/create notes, edit ordinary text, and control native checklists through the Mac bridge |
 | `verdigris-settings` | No launcher | Shared settings, opened from either app |
 | `verdigris-sync` | No launcher | Background message cache and synchronization |
 
-Phone and Messages keep those short names in the app menu. Their app IDs and
-icons use `dev.turbinebmw.Verdigris.*`. Settings opens from Messages' menu or
-Phone's settings button and has no `.desktop` entry.
+Phone, Messages, Reminders, and Notes keep those short names in the app menu. Their app IDs and
+icons use `dev.turbinebmw.Verdigris.*`. Settings opens from the apps and has no
+`.desktop` entry.
 
 ## Connect
 
@@ -59,13 +66,51 @@ Phone's settings button and has no `.desktop` entry.
    systemctl --user enable --now verdigris-sync.service
    ```
 
-The native installer installs the four Rust programs. The Python CLI/backend is
+The native installer installs the six Rust programs. The Python CLI/backend is
 installed separately with `python -m pip install -e .` inside a virtual environment
 with system D-Bus/GObject bindings; see the backend guide for pairing and services.
 
 [Native app setup and behavior](rust/verdigris-apps/README.md) covers Mac setup,
 SMS forwarding, cache behavior, attachment limits, keyboard shortcuts, and remaining
 features. Enter adds a newline in Messages; **Ctrl+Enter sends**.
+
+## Apple Reminders
+
+For Apple Reminders, install the separate iCloudBridge companion on your Mac and
+connect through **Settings → Reminders and Notes connection**. The native **Reminders** app
+supports list filtering, search, task creation, title/notes editing, completion,
+live EventKit-driven refresh, and cached viewing offline. See
+[Reminders setup and current limitations](docs/reminders.md).
+
+## Apple Notes
+
+For Apple Notes, add the [Notes extension](docs/notes.md) to the same Mac companion
+and open **Notes** on Linux. It provides folder browsing, text search, new-note
+creation, ordinary text editing, offline reading, and native checklist controls.
+Shared notes support editing when your share permission and the note format allow it.
+A debounced Mac filesystem monitor drives authenticated live refreshes without
+sending note content over the change stream; a 15-minute safety refresh remains.
+See the setup guide for Mac permissions and validation limits.
+
+## iPhone app notifications
+
+Open **Settings → iPhone app notifications** from Phone or Messages. Apps appear
+as the Verdigris Bluetooth service receives their notifications. Select an app to:
+
+- Turn its notifications off entirely on Linux.
+- Choose an installed Linux app to open when you click its notification.
+- Choose a custom icon, or reset to the automatic icon.
+
+Save applies to future notifications without restarting the service. Custom images
+are copied into Verdigris's settings, so you can move the original file afterward.
+Clicking launches the chosen app; it does not deep-link to a particular message.
+Your desktop notification server must support notification actions for clicks to
+launch apps.
+
+This controls app notifications received through ANCS. It does not change iPhone
+settings, stop message synchronization, or disable the separate SMS/call alerts.
+It requires the updated **Verdigris** Bluetooth backend; a still-running Blue backend
+does not read these preferences. See the [backend guide](docs/backend.md) for setup.
 
 ## Upgrading from Blue
 

@@ -25,6 +25,7 @@ uuid = { version = "1", features = ["v4"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 secret-service = { version = "5", features = ["rt-tokio-crypto-rust"] }
 rust_socketio = { version = "0.6", features = ["async"] }
+tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "native-tls"] }
 
 [[bin]]
 name = "verdigris-messages"
@@ -37,6 +38,14 @@ path = "src/bin/phone.rs"
 [[bin]]
 name = "verdigris-settings"
 path = "src/bin/settings.rs"
+
+[[bin]]
+name = "verdigris-reminders"
+path = "src/bin/reminders.rs"
+
+[[bin]]
+name = "verdigris-notes"
+path = "src/bin/notes.rs"
 
 [[bin]]
 name = "verdigris-sync"

@@ -2,6 +2,45 @@
 
 ## Unreleased — Verdigris fork
 
+- Fixed iPhone app notifications arriving four times after the BLE link
+  bounced: the ANCS client now drops its old characteristic signal receivers
+  when BlueZ removes the characteristics, instead of stacking a second set
+  when the same object paths come back.
+
+- Added authenticated live Reminders invalidations from EventKit through the
+  Mac bridge, with debouncing, reconnect reconciliation, and a 15-minute safety
+  refresh instead of minute-by-minute polling.
+
+- Added live Notes invalidations by watching the Mac's Notes SQLite/WAL files
+  with debounced vnode events plus FSEvents re-arming, and a separate generation
+  on the authenticated bridge stream. The Notes client preserves drafts and
+  pending changes around refreshes, retains reconnect reconciliation, and
+  replaces 15-second polling with a 15-minute safety refresh.
+
+- Enabled shared Notes editing with local CloudKit permission checks, inherited
+  folder permissions, and a native editor writability check. Live collaboration
+  testing remains pending; view-only and uncertain permissions stay read-only.
+
+- Added ordinary Notes title/body editing with preserved drafts and targeted
+  native text replacements. Notes edits now wake a sleeping or headless Mac
+  display before checking whether its GUI session is genuinely unlocked, without
+  hiding edit controls for macOS's transient non-authenticating lock state.
+
+- Integrated native Notes checkboxes and item-text editing, with retained drafts,
+  revision/replay guards, offline checklist viewing, and persistent Mac signing.
+  Protected notes, parent-checkbox toggles, and unsupported structures remain
+  read-only where native editing has not been validated.
+
+- Added native Notes browsing, folder/text search, new-note creation, and private
+  offline snapshots through an Apple Events extension to the same Mac companion.
+
+- Added native Reminders through a Mac iCloudBridge companion, with separate
+  connection settings, list/search filters, create/edit/complete actions, and
+  private cached viewing offline. Included a Reminders-only Mac setup patch.
+
+- Added per-iPhone-app notification settings: ignore notifications, choose a Linux
+  app to open when clicked, and import or reset a custom icon.
+
 - Forked from [Blue](https://github.com/gutbash/blue), preserving its Git history
   and upstream attribution.
 - Added native Rust/GTK4/libadwaita Phone and Messages apps with internal Settings,

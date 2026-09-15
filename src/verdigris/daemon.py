@@ -32,6 +32,7 @@ from gi.repository import GLib
 from verdigris import bluez_setup, config
 from verdigris.ancs.client import AncsClient
 from verdigris.ancs.events import AncsEvent
+from verdigris.ancs.preferences import preferences, remember_app
 from verdigris.backup.runner import ATTACHMENTS_DIR
 from verdigris.bus import main_loop
 from verdigris.contacts import ContactsResolver, pull_phonebook
@@ -1088,6 +1089,9 @@ class Daemon:
         )
 
     def _fanout_ancs(self, event: AncsEvent) -> None:
+        remember_app(event.app_id, event.app_name)
+        if not preferences.rule(event.app_id).enabled:
+            return
         for sink in self.sinks:
             try:
                 handler = getattr(sink, "handle_ancs", None)

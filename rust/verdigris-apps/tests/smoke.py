@@ -24,6 +24,10 @@ with tempfile.TemporaryDirectory(prefix="verdigris-test-") as temporary:
     data = temporary / "data/verdigris"
     config.mkdir(parents=True)
     data.mkdir(parents=True)
+    (data / "notification-apps.json").write_text(json.dumps({"com.example.chat": "Example Chat"}))
+    applications = temporary / "data/applications"
+    applications.mkdir()
+    (applications / "verdigris-fixture.desktop").write_text("[Desktop Entry]\nType=Application\nName=Verdigris Fixture Chat\nExec=false\nIcon=mail-message-new\n")
     server = "http://127.0.0.1:1/"
     (config / "connection.json").write_text(json.dumps({"server": server}))
     connection = sqlite3.connect(data / (hashlib.sha256(server.encode()).hexdigest() + ".sqlite"))
@@ -47,6 +51,12 @@ with tempfile.TemporaryDirectory(prefix="verdigris-test-") as temporary:
     contact_dir.mkdir(parents=True)
     photo = contact_dir / "fixture.svg"
     photo.write_text("<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='#3584e4'/><circle cx='32' cy='23' r='12' fill='white'/><ellipse cx='32' cy='62' rx='24' ry='24' fill='white'/></svg>")
+    notification_icons = config / "notification-icons"
+    notification_icons.mkdir()
+    (notification_icons / "fixture.svg").write_text(photo.read_text())
+    (config / "notification-rules.json").write_text(json.dumps({"version": 1, "apps": {
+        "com.example.chat": {"enabled": True, "desktop_id": None, "icon": "fixture.svg"}
+    }}))
     book = sqlite3.connect(contact_dir / "contacts.sqlite")
     book.executescript("CREATE TABLE contacts(id INTEGER PRIMARY KEY,full_name TEXT,nickname TEXT,photo_path TEXT); CREATE TABLE phones(phone_norm TEXT,contact_id INTEGER);")
     book.execute("INSERT INTO contacts VALUES(1,'Alex Example','Alex',?)", (str(photo),))
@@ -173,6 +183,31 @@ loop.run()"""], env=env, text=True, timeout=5)
                     time.sleep(1)
                     assert app.poll() is None, 'Messages crashed opening new-message composer'
                     subprocess.run(['import','-window','root',str(artifacts / 'compose.png')],env=env,check=True)
+                if name == "settings":
+                    click(300, 650)  # iPhone app notifications
+                    time.sleep(0.8)
+                    subprocess.run(['import', '-window', 'root', str(artifacts / 'notification-apps.png')], env=env, check=True)
+                    click(250, 205)  # Example Chat
+                    time.sleep(0.8)
+                    subprocess.run(['import', '-window', 'root', str(artifacts / 'notification-rule.png')], env=env, check=True)
+                    click(500, 181)  # Disable this source app.
+                    click(250, 235)  # Select a click target.
+                    time.sleep(0.8)
+                    click(230, 130)
+                    for character in "fixture":
+                        key(character)
+                    time.sleep(0.8)
+                    subprocess.run(['import', '-window', 'root', str(artifacts / 'notification-app-picker.png')], env=env, check=True)
+                    click(250, 185)
+                    time.sleep(0.5)
+                    click(508, 291)  # Reset custom icon to automatic.
+                    click(482, 73)   # Save.
+                    time.sleep(0.8)
+                    rules = json.loads((config / 'notification-rules.json').read_text())
+                    assert rules['apps']['com.example.chat'] == {
+                        'enabled': False, 'desktop_id': 'verdigris-fixture.desktop', 'icon': None,
+                    }, rules
+                    assert app.poll() is None, 'Settings crashed saving notification preferences'
             finally:
                 app.terminate()
                 app.wait(timeout=10)

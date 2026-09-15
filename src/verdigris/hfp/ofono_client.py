@@ -1,19 +1,19 @@
-"""oFono HFP client — observes the iPhone's Hands-Free modem and exposes
-call control (answer / hang up / dial) plus a CallEvent stream.
+"""HFP client — observes the iPhone's Hands-Free gateway and exposes call
+control (answer / hang up / dial) plus a CallEvent stream.
 
-oFono does the HFP protocol itself (AT commands over RFCOMM, the service-
-level connection, codec negotiation). We just watch org.ofono on the
+Modern PipeWire provides a native Bluetooth telephony service on the session
+bus.  Its call-control API deliberately includes the oFono interfaces, so the
+same client can also support older installations where oFono owns HFP on the
 system bus:
 
-  org.ofono.Manager           ModemAdded / ModemRemoved, GetModems
-  org.ofono.Modem             one per device; Type="hfp" is the iPhone
-  org.ofono.VoiceCallManager  CallAdded / CallRemoved, Dial, HangupAll
+  org.ofono.Manager           gateway added / removed, GetModems
+  org.ofono.VoiceCallManager  call added / removed, Dial, HangupAll
   org.ofono.VoiceCall         per-call State + LineIdentification,
                               Answer / Hangup
 
-Call audio (SCO) is carried by PipeWire's oFono HFP backend — nothing for
-us to route. `verdigris hfp-enable` writes the one WirePlumber config
-that selects that backend.
+Call audio (SCO) is carried by PipeWire in either arrangement — nothing for us
+to route.  Prefer the native service because it avoids an extra daemon and the
+HFP profile-registration race between oFono and PipeWire.
 
 Confirmed end-to-end against iPhone 16 Pro Max / iOS 26.5 — see
 spike/05b_hfp_ofono.py and spike/RESULTS.md (HFP addendum).
@@ -28,12 +28,14 @@ from pathlib import Path
 import dbus
 import dbus.exceptions
 
-from verdigris.bus import system_bus
+from verdigris.bus import session_bus, system_bus
 from verdigris.hfp.events import CallEvent, call_event_from_ofono
 
 log = logging.getLogger(__name__)
 
 OFONO = "org.ofono"
+PIPEWIRE_TELEPHONY = "org.pipewire.Telephony"
+PIPEWIRE_MANAGER_PATH = "/org/pipewire/Telephony"
 _MGR_IFACE = f"{OFONO}.Manager"
 _MODEM_IFACE = f"{OFONO}.Modem"
 _VCM_IFACE = f"{OFONO}.VoiceCallManager"
@@ -79,6 +81,19 @@ def write_wireplumber_config() -> tuple[Path, Path | None]:
     return path, backup
 
 
+def native_pipewire_available() -> bool:
+    """Return whether PipeWire's native Bluetooth telephony API is running."""
+    try:
+        manager = dbus.Interface(
+            session_bus.get_object(PIPEWIRE_TELEPHONY, PIPEWIRE_MANAGER_PATH),
+            _MGR_IFACE,
+        )
+        manager.GetModems()
+    except dbus.exceptions.DBusException:
+        return False
+    return True
+
+
 # ---- HFP manager --------------------------------------------------------
 
 class HfpError(RuntimeError):
@@ -102,6 +117,10 @@ class HfpManager:
 
         self._modem_path: str | None = None
         self._vcm_hooked = False
+        self._bus = system_bus
+        self._service = OFONO
+        self._manager_path = "/"
+        self._native_pipewire = False
 
         self._mgr_matches: list = []          # ModemAdded / ModemRemoved
         self._modem_sub = None                # modem PropertyChanged
@@ -113,26 +132,44 @@ class HfpManager:
     # ---- lifecycle ------------------------------------------------------
 
     def start(self) -> None:
-        try:
-            # Creating the proxy can itself activate org.ofono and raise
-            # ServiceUnknown when oFono is not installed. HFP is optional, so
-            # that belongs in the same degraded-mode path as GetModems().
-            mgr = dbus.Interface(system_bus.get_object(OFONO, "/"), _MGR_IFACE)
-            modems = mgr.GetModems()
-        except dbus.exceptions.DBusException as e:
+        # PipeWire's native backend is already the HFP profile owner on modern
+        # desktops.  Using it avoids restarting Bluetooth or racing a second
+        # profile owner.  Older PipeWire releases lack this service, so retain
+        # the proven system-bus oFono path as a fallback.
+        candidates = (
+            (session_bus, PIPEWIRE_TELEPHONY, PIPEWIRE_MANAGER_PATH, True),
+            (system_bus, OFONO, "/", False),
+        )
+        errors = []
+        for bus, service, manager_path, native in candidates:
+            try:
+                mgr = dbus.Interface(
+                    bus.get_object(service, manager_path), _MGR_IFACE)
+                modems = mgr.GetModems()
+            except dbus.exceptions.DBusException as e:
+                errors.append(f"{service}: {e.get_dbus_name()}")
+                continue
+            self._bus = bus
+            self._service = service
+            self._manager_path = manager_path
+            self._native_pipewire = native
+            break
+        else:
             log.warning(
-                "oFono not available (%s) — HFP calls disabled. "
+                "no HFP telephony service available (%s) — calls disabled. "
                 "Run `verdigris hfp-enable`, then restart the daemon.",
-                e.get_dbus_name(),
+                "; ".join(errors),
             )
             return
         self._mgr_matches.append(
             mgr.connect_to_signal("ModemAdded", self._on_modem_added))
         self._mgr_matches.append(
             mgr.connect_to_signal("ModemRemoved", self._on_modem_removed))
-        for path, props in modems:
+        for path, props in _object_entries(modems):
             self._on_modem_added(path, props)
-        log.info("HFP manager started (oFono); modem=%s", self._modem_path)
+        backend = "PipeWire native" if self._native_pipewire else "oFono"
+        log.info("HFP manager started (%s); gateway=%s", backend,
+                 self._modem_path)
 
     def stop(self) -> None:
         log.info("HFP manager stopping")
@@ -158,15 +195,23 @@ class HfpManager:
 
     def _on_modem_added(self, path, props) -> None:
         props = dict(props)
-        if str(props.get("Type", "")) != "hfp":
+        # Native PipeWire gateways do not implement org.ofono.Modem and their
+        # GetModems property dictionary may be empty.  The manager contains
+        # only Bluetooth audio gateways, so the service itself is sufficient
+        # identification.  Real oFono can contain other modem types.
+        if not self._native_pipewire and str(props.get("Type", "")) != "hfp":
             return
         if self._modem_path is not None:
             return  # we track a single iPhone modem
         self._modem_path = str(path)
         log.info("HFP modem appeared: %s (%s)",
                  self._modem_path, props.get("Name"))
+        if self._native_pipewire:
+            self._maybe_hook_vcm({"Interfaces": [_VCM_IFACE]})
+            return
         modem = dbus.Interface(
-            system_bus.get_object(OFONO, self._modem_path), _MODEM_IFACE)
+            self._bus.get_object(self._service, self._modem_path),
+            _MODEM_IFACE)
         self._modem_sub = modem.connect_to_signal(
             "PropertyChanged", self._on_modem_prop)
         self._ensure_powered(modem, props)
@@ -186,7 +231,8 @@ class HfpManager:
             return
         try:
             modem = dbus.Interface(
-                system_bus.get_object(OFONO, self._modem_path), _MODEM_IFACE)
+                self._bus.get_object(self._service, self._modem_path),
+                _MODEM_IFACE)
             self._maybe_hook_vcm(dict(modem.GetProperties()))
         except dbus.exceptions.DBusException:
             pass
@@ -216,7 +262,7 @@ class HfpManager:
         if _VCM_IFACE not in ifaces:
             return
         vcm = dbus.Interface(
-            system_bus.get_object(OFONO, self._modem_path), _VCM_IFACE)
+            self._bus.get_object(self._service, self._modem_path), _VCM_IFACE)
         self._vcm_matches.append(
             vcm.connect_to_signal("CallAdded", self._on_call_added))
         self._vcm_matches.append(
@@ -224,7 +270,7 @@ class HfpManager:
         self._vcm_hooked = True
         log.info("HFP call control ready")
         try:
-            for cpath, cprops in vcm.GetCalls():
+            for cpath, cprops in _object_entries(vcm.GetCalls()):
                 self._on_call_added(cpath, cprops)
         except dbus.exceptions.DBusException:
             pass
@@ -250,7 +296,8 @@ class HfpManager:
             "contact_name": self.resolve_contact(peer) if peer else None,
         }
         self._calls[path] = info
-        vc = dbus.Interface(system_bus.get_object(OFONO, path), _VC_IFACE)
+        vc = dbus.Interface(
+            self._bus.get_object(self._service, path), _VC_IFACE)
         self._call_subs[path] = vc.connect_to_signal(
             "PropertyChanged",
             lambda n, v, p=path: self._on_call_prop(p, n, v),
@@ -325,19 +372,26 @@ class HfpManager:
     def hangup_all(self) -> None:
         self._require_modem()
         dbus.Interface(
-            system_bus.get_object(OFONO, self._modem_path), _VCM_IFACE
+            self._bus.get_object(self._service, self._modem_path), _VCM_IFACE
         ).HangupAll()
 
     def dial(self, number: str) -> str:
-        """Place a call. Returns the new oFono VoiceCall object path."""
+        """Place a call and return its path when the backend provides it."""
         self._require_modem()
         vcm = dbus.Interface(
-            system_bus.get_object(OFONO, self._modem_path), _VCM_IFACE)
+            self._bus.get_object(self._service, self._modem_path), _VCM_IFACE)
+        if self._native_pipewire:
+            # PipeWire follows the native telephony API here: Dial takes one
+            # argument and announces the allocated call path asynchronously
+            # through CallAdded.  Our callers do not rely on the immediate
+            # return value; ListCalls/CallStateChanged provide the real path.
+            vcm.Dial(number)
+            return ""
         return str(vcm.Dial(number, ""))
 
     def _voicecall(self, call_path: str) -> dbus.Interface:
         return dbus.Interface(
-            system_bus.get_object(OFONO, call_path), _VC_IFACE)
+            self._bus.get_object(self._service, call_path), _VC_IFACE)
 
     def _require_modem(self) -> None:
         if not self._modem_path or not self._vcm_hooked:
@@ -354,3 +408,8 @@ def _safe_remove(match) -> None:
         match.remove()
     except Exception:
         pass
+
+
+def _object_entries(objects):
+    """Iterate both oFono's array-of-structs and PipeWire's object map."""
+    return objects.items() if hasattr(objects, "items") else objects
